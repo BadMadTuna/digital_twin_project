@@ -43,15 +43,17 @@ def train_model():
     print(f"Initializing training using dataset at: {dataset_path}")
     
     # 1. Define Dataset Configuration
+    # NOTE: We set formatter to "ljspeech" as a placeholder string.
+    # We will pass the actual function explicitly to load_tts_samples below.
     dataset_config = BaseDatasetConfig(
-        formatter=custom_formatter, # <--- We now use our custom function
+        formatter="ljspeech", 
         meta_file_train="metadata.csv",
         path=dataset_path
     )
 
     # 2. Configure VITS Model
     config = VitsConfig(
-        batch_size=8,   # Reduced to 8 to be safe on GPU memory
+        batch_size=8,
         epochs=50,
         print_step=5,
         eval_split_size=0.1,
@@ -70,12 +72,13 @@ def train_model():
     ap = AudioProcessor.init_from_config(config)
 
     # 4. Load Data Samples
-    # The custom_formatter handles parsing your metadata.csv
+    # We pass 'formatter=custom_formatter' here to override the string in the config
     train_samples, eval_samples = load_tts_samples(
         dataset_config,
         eval_split=True,
         eval_split_max_size=config.eval_split_size,
         eval_split_size=config.eval_split_size,
+        formatter=custom_formatter 
     )
 
     # 5. Initialize Model
