@@ -1,4 +1,5 @@
 import os
+import sys
 from trainer import Trainer, TrainerArgs
 from TTS.tts.configs.shared_configs import BaseDatasetConfig
 from TTS.tts.configs.vits_config import VitsConfig
@@ -17,34 +18,63 @@ os.makedirs(output_path, exist_ok=True)
 
 def custom_formatter(root_path, manifest_file, **kwargs):
     """
-    Reads a CSV file with format: filename.wav|transcription
+    Reads a CSV file and auto-detects if it uses | or , as a separator.
     """
     items = []
+    print(f" -> Reading metadata from: {manifest_file}")
+    
     with open(manifest_file, "r", encoding="utf-8") as f:
-        for line in f:
-            cols = line.strip().split("|")
-            # We expect at least 2 columns: filename and text
-            if len(cols) >= 2:
-                wav_filename = cols[0].strip()
-                text = cols[1].strip()
-                
-                # Construct full path to audio file
-                wav_path = os.path.join(root_path, wav_filename)
-                
-                items.append({
-                    "text": text,
-                    "audio_file": wav_path,
-                    "speaker_name": "my_voice",
-                    "root_path": root_path
-                })
+        # Read the entire file into a list to check format
+        lines = f.readlines()
+        
+    if not lines:
+        print(" -> Error: Metadata file is empty!")
+        return []
+
+    # Check the first valid line to guess the delimiter
+    first_line = lines[0].strip()
+    delimiter = "|"
+    if "|" not in first_line and "," in first_line:
+        delimiter = ","
+        print(f" -> Auto-detected delimiter: COMMA (Example line: {first_line})")
+    else:
+        print(f" -> Auto-detected delimiter: PIPE (Example line: {first_line})")
+
+    # Process lines
+    for i, line in enumerate(lines):
+        line = line.strip()
+        if not line: continue
+        
+        cols = line.split(delimiter)
+        
+        # We need at least filename and text
+        if len(cols) >= 2:
+            wav_filename = cols[0].strip()
+            # Join the rest back together in case the text itself contains the delimiter
+            text = delimiter.join(cols[1:]).strip()
+            
+            # Construct full path to audio file
+            wav_path = os.path.join(root_path, wav_filename)
+            
+            items.append({
+                "text": text,
+                "audio_file": wav_path,
+                "speaker_name": "my_voice",
+                "root_path": root_path
+            })
+        else:
+            # Debug: print the first few skipped lines to help troubleshoot
+            if i < 3:
+                print(f" -> Warning: Skipping line {i} (Not enough columns): '{line}'")
+
+    print(f" -> Successfully loaded {len(items)} items.")
     return items
 
 def train_model():
     print(f"Initializing training using dataset at: {dataset_path}")
     
     # 1. Define Dataset Configuration
-    # NOTE: We set formatter to "ljspeech" as a placeholder string.
-    # We will pass the actual function explicitly to load_tts_samples below.
+    # We pass 'ljspeech' string to satisfy validation, but overwrite it below
     dataset_config = BaseDatasetConfig(
         formatter="ljspeech", 
         meta_file_train="metadata.csv",
@@ -72,7 +102,7 @@ def train_model():
     ap = AudioProcessor.init_from_config(config)
 
     # 4. Load Data Samples
-    # We pass 'formatter=custom_formatter' here to override the string in the config
+    # Pass our robust custom_formatter here
     train_samples, eval_samples = load_tts_samples(
         dataset_config,
         eval_split=True,
