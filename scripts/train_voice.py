@@ -9,8 +9,8 @@ from TTS.tts.utils.text.tokenizer import TTSTokenizer
 from TTS.utils.audio import AudioProcessor
 
 # --- Configuration ---
+# This path points to where your metadata.csv and audio files are located
 dataset_path = os.path.join(os.getcwd(), "audio_data/dataset")
-metadata_file = os.path.join(dataset_path, "metadata.csv")
 output_path = os.path.join(os.getcwd(), "models/voice_model")
 
 # Ensure output directory exists
@@ -19,12 +19,19 @@ os.makedirs(output_path, exist_ok=True)
 def custom_formatter(root_path, manifest_file, **kwargs):
     """
     Reads a CSV file and auto-detects if it uses | or , as a separator.
+    Handles path joining for metadata and audio files.
     """
     items = []
-    print(f" -> Reading metadata from: {manifest_file}")
     
-    with open(manifest_file, "r", encoding="utf-8") as f:
-        # Read the entire file into a list to check format
+    # FIX: Join the root_path and manifest_file to get the full path
+    manifest_path = os.path.join(root_path, manifest_file)
+    print(f" -> Reading metadata from: {manifest_path}")
+    
+    if not os.path.exists(manifest_path):
+        print(f" -> Error: File not found at {manifest_path}")
+        return []
+    
+    with open(manifest_path, "r", encoding="utf-8") as f:
         lines = f.readlines()
         
     if not lines:
@@ -36,9 +43,9 @@ def custom_formatter(root_path, manifest_file, **kwargs):
     delimiter = "|"
     if "|" not in first_line and "," in first_line:
         delimiter = ","
-        print(f" -> Auto-detected delimiter: COMMA (Example line: {first_line})")
+        print(f" -> Auto-detected delimiter: COMMA")
     else:
-        print(f" -> Auto-detected delimiter: PIPE (Example line: {first_line})")
+        print(f" -> Auto-detected delimiter: PIPE")
 
     # Process lines
     for i, line in enumerate(lines):
@@ -47,25 +54,33 @@ def custom_formatter(root_path, manifest_file, **kwargs):
         
         cols = line.split(delimiter)
         
-        # We need at least filename and text
         if len(cols) >= 2:
             wav_filename = cols[0].strip()
-            # Join the rest back together in case the text itself contains the delimiter
             text = delimiter.join(cols[1:]).strip()
             
-            # Construct full path to audio file
+            # FIX: Robust audio path checking
+            # 1. Try direct path
             wav_path = os.path.join(root_path, wav_filename)
             
-            items.append({
-                "text": text,
-                "audio_file": wav_path,
-                "speaker_name": "my_voice",
-                "root_path": root_path
-            })
-        else:
-            # Debug: print the first few skipped lines to help troubleshoot
-            if i < 3:
-                print(f" -> Warning: Skipping line {i} (Not enough columns): '{line}'")
+            # 2. If not found, try looking in a 'wavs' subdirectory (common format)
+            if not os.path.exists(wav_path):
+                wav_path_subdir = os.path.join(root_path, "wavs", wav_filename)
+                if os.path.exists(wav_path_subdir):
+                    wav_path = wav_path_subdir
+            
+            # Only add if we actually found the audio file
+            if os.path.exists(wav_path):
+                items.append({
+                    "text": text,
+                    "audio_file": wav_path,
+                    "speaker_name": "my_voice",
+                    "root_path": root_path
+                })
+            else:
+                 # Warn only for the first few missing files to avoid spamming logs
+                 if i < 3:
+                     print(f" -> Warning: Audio file not found for {wav_filename}")
+                     print(f"    (Looked at: {wav_path})")
 
     print(f" -> Successfully loaded {len(items)} items.")
     return items
@@ -74,7 +89,6 @@ def train_model():
     print(f"Initializing training using dataset at: {dataset_path}")
     
     # 1. Define Dataset Configuration
-    # We pass 'ljspeech' string to satisfy validation, but overwrite it below
     dataset_config = BaseDatasetConfig(
         formatter="ljspeech", 
         meta_file_train="metadata.csv",
@@ -102,7 +116,6 @@ def train_model():
     ap = AudioProcessor.init_from_config(config)
 
     # 4. Load Data Samples
-    # Pass our robust custom_formatter here
     train_samples, eval_samples = load_tts_samples(
         dataset_config,
         eval_split=True,
