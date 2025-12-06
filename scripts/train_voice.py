@@ -15,35 +15,62 @@ output_path = os.path.join(os.getcwd(), "models/voice_model")
 # Ensure output directory exists
 os.makedirs(output_path, exist_ok=True)
 
+def custom_formatter(root_path, manifest_file, **kwargs):
+    """
+    Reads a CSV file with format: filename.wav|transcription
+    """
+    items = []
+    with open(manifest_file, "r", encoding="utf-8") as f:
+        for line in f:
+            cols = line.strip().split("|")
+            # We expect at least 2 columns: filename and text
+            if len(cols) >= 2:
+                wav_filename = cols[0].strip()
+                text = cols[1].strip()
+                
+                # Construct full path to audio file
+                wav_path = os.path.join(root_path, wav_filename)
+                
+                items.append({
+                    "text": text,
+                    "audio_file": wav_path,
+                    "speaker_name": "my_voice",
+                    "root_path": root_path
+                })
+    return items
+
 def train_model():
     print(f"Initializing training using dataset at: {dataset_path}")
     
     # 1. Define Dataset Configuration
-    # We use the metadata.csv generated in the previous step
     dataset_config = BaseDatasetConfig(
-        formatter="ljspeech", # The format output by our process_audio script (filename|text)
+        formatter=custom_formatter, # <--- We now use our custom function
         meta_file_train="metadata.csv",
         path=dataset_path
     )
 
-    # 2. Configure VITS Model (optimized for voice cloning)
+    # 2. Configure VITS Model
     config = VitsConfig(
-        batch_size=16, # Lower this if you get Out Of Memory (OOM) errors
-        epochs=50,      # 50-100 is usually good for fine-tuning
+        batch_size=8,   # Reduced to 8 to be safe on GPU memory
+        epochs=50,
         print_step=5,
         eval_split_size=0.1,
         print_eval=False,
         mixed_precision=True,
         output_path=output_path,
         datasets=[dataset_config],
-        cudnn_benchmark=False
+        cudnn_benchmark=False,
+        test_sentences=[
+            "Hello, this is my digital twin speaking.",
+            "I can generate new audio from text now."
+        ]
     )
 
     # 3. Initialize Audio Processor
     ap = AudioProcessor.init_from_config(config)
 
     # 4. Load Data Samples
-    # The formatter handles parsing your metadata.csv
+    # The custom_formatter handles parsing your metadata.csv
     train_samples, eval_samples = load_tts_samples(
         dataset_config,
         eval_split=True,
