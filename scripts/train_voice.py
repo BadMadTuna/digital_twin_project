@@ -85,13 +85,19 @@ def train_model():
     config.output_path = output_path
     config.datasets = [dataset_config]
     config.batch_size = 8
-    config.epochs = 200         # Give it time to settle
+    config.epochs = 100         # Give it time to settle
     config.phoneme_cache_path = cache_path
     
     # --- CRITICAL: LOWER THE LEARNING RATE ---
     # Default is 2e-4 (0.0002). We set it to 5e-5 (0.00005).
     # This prevents the model from "overshooting" and helps smooth out robotic noise.
-    config.lr = 0.00001 
+# Update the top-level variable
+    config.lr = 0.00005 
+    
+    # ALSO update the internal dictionary (This is the one ignoring you!)
+    if hasattr(config, "optimizer_params"):
+        config.optimizer_params["lr"] = 0.00005
+        print(" -> FORCED optimizer_params['lr'] to 0.00005")
     
     # 4. Initialize Audio Processor
     ap = AudioProcessor.init_from_config(config)
