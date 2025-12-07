@@ -56,7 +56,7 @@ def custom_formatter(root_path, manifest_file, **kwargs):
                 items.append({
                     "text": text,
                     "audio_file": wav_path,
-                    "speaker_name": "ljspeech", # Must match the pre-trained model speaker name
+                    "speaker_name": "ljspeech", 
                     "root_path": root_path
                 })
     return items
@@ -85,10 +85,10 @@ def train_model():
         path=dataset_path
     )
 
-    # 3. Configure VITS Model (optimized for Fine-Tuning)
+    # 3. Configure VITS Model
     config = VitsConfig(
         batch_size=8,
-        epochs=100,  # Increased epochs for fine-tuning
+        epochs=100, 
         print_step=5,
         eval_split_size=0.1,
         print_eval=False,
@@ -99,10 +99,8 @@ def train_model():
         test_sentences=[
             "Hello, this is my digital twin speaking.",
             "I can generate new audio from text now."
-        ],
-        # VITAL: Freeze the text encoder so we don't un-learn English
-        # We only want to train the audio decoder (the voice part)
-        freeze_encoder=True 
+        ]
+        # Removed freeze_encoder=True to fix compatibility
     )
 
     # 4. Initialize Audio Processor
@@ -121,8 +119,7 @@ def train_model():
     tokenizer, config = TTSTokenizer.init_from_config(config)
     model = Vits(config, ap, tokenizer, speaker_manager=None)
     
-    print(" -> Loading pre-trained weights...")
-    # This loads the weights from the file into our model object
+    print(" -> Loading pre-trained weights (Transfer Learning)...")
     model.load_checkpoint(config, pretrained_model_path, strict=False)
 
     # 7. Initialize Trainer
