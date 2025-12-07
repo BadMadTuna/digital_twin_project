@@ -1,5 +1,5 @@
 import os
-import sys
+import shutil
 from trainer import Trainer, TrainerArgs
 from TTS.tts.configs.shared_configs import BaseDatasetConfig
 from TTS.tts.configs.vits_config import VitsConfig
@@ -7,9 +7,9 @@ from TTS.tts.datasets import load_tts_samples
 from TTS.tts.models.vits import Vits
 from TTS.tts.utils.text.tokenizer import TTSTokenizer
 from TTS.utils.audio import AudioProcessor
+from TTS.utils.manage import ModelManager
 
 # --- Configuration ---
-# This path points to where your metadata.csv and audio files are located
 dataset_path = os.path.join(os.getcwd(), "audio_data/dataset")
 output_path = os.path.join(os.getcwd(), "models/voice_model")
 
@@ -22,83 +22,73 @@ def custom_formatter(root_path, manifest_file, **kwargs):
     Handles path joining for metadata and audio files.
     """
     items = []
-    
-    # FIX: Join the root_path and manifest_file to get the full path
     manifest_path = os.path.join(root_path, manifest_file)
-    print(f" -> Reading metadata from: {manifest_path}")
     
     if not os.path.exists(manifest_path):
-        print(f" -> Error: File not found at {manifest_path}")
         return []
     
     with open(manifest_path, "r", encoding="utf-8") as f:
         lines = f.readlines()
         
     if not lines:
-        print(" -> Error: Metadata file is empty!")
         return []
 
-    # Check the first valid line to guess the delimiter
     first_line = lines[0].strip()
     delimiter = "|"
     if "|" not in first_line and "," in first_line:
         delimiter = ","
-        print(f" -> Auto-detected delimiter: COMMA")
-    else:
-        print(f" -> Auto-detected delimiter: PIPE")
 
-    # Process lines
-    for i, line in enumerate(lines):
+    for line in lines:
         line = line.strip()
         if not line: continue
-        
         cols = line.split(delimiter)
-        
         if len(cols) >= 2:
             wav_filename = cols[0].strip()
             text = delimiter.join(cols[1:]).strip()
             
-            # FIX: Robust audio path checking
-            # 1. Try direct path
             wav_path = os.path.join(root_path, wav_filename)
-            
-            # 2. If not found, try looking in a 'wavs' subdirectory (common format)
             if not os.path.exists(wav_path):
                 wav_path_subdir = os.path.join(root_path, "wavs", wav_filename)
                 if os.path.exists(wav_path_subdir):
                     wav_path = wav_path_subdir
             
-            # Only add if we actually found the audio file
             if os.path.exists(wav_path):
                 items.append({
                     "text": text,
                     "audio_file": wav_path,
-                    "speaker_name": "my_voice",
+                    "speaker_name": "ljspeech", # Must match the pre-trained model speaker name
                     "root_path": root_path
                 })
-            else:
-                 # Warn only for the first few missing files to avoid spamming logs
-                 if i < 3:
-                     print(f" -> Warning: Audio file not found for {wav_filename}")
-                     print(f"    (Looked at: {wav_path})")
-
-    print(f" -> Successfully loaded {len(items)} items.")
     return items
 
-def train_model():
-    print(f"Initializing training using dataset at: {dataset_path}")
+def download_pretrained_model():
+    """Downloads the standard LJSpeech VITS model to use as a base."""
+    print(" -> Downloading pre-trained VITS model (LJSpeech)...")
+    manager = ModelManager()
+    model_name = "tts_models/en/ljspeech/vits"
     
-    # 1. Define Dataset Configuration
+    # Download model
+    model_path, config_path, _ = manager.download_model(model_name)
+    return model_path, config_path
+
+def train_model():
+    print(f"Initializing Fine-Tuning using dataset at: {dataset_path}")
+
+    # 1. Download Base Model
+    pretrained_model_path, pretrained_config_path = download_pretrained_model()
+    print(f" -> Base model loaded from: {pretrained_model_path}")
+
+    # 2. Define Dataset Configuration
     dataset_config = BaseDatasetConfig(
         formatter="ljspeech", 
         meta_file_train="metadata.csv",
         path=dataset_path
     )
 
-    # 2. Configure VITS Model
+    # 3. Configure VITS Model (optimized for Fine-Tuning)
     config = VitsConfig(
         batch_size=8,
-        epochs=50,
+        epochs=100,  # Increased epochs for fine-tuning
         print_step=5,
         eval_split_size=0.1,
         print_eval=False,
@@ -109,13 +99,16 @@ def train_model():
         test_sentences=[
             "Hello, this is my digital twin speaking.",
             "I can generate new audio from text now."
-        ]
+        ],
+        # VITAL: Freeze the text encoder so we don't un-learn English
+        # We only want to train the audio decoder (the voice part)
+        freeze_encoder=True 
     )
 
-    # 3. Initialize Audio Processor
+    # 4. Initialize Audio Processor
     ap = AudioProcessor.init_from_config(config)
 
-    # 4. Load Data Samples
+    # 5. Load Data Samples
     train_samples, eval_samples = load_tts_samples(
         dataset_config,
         eval_split=True,
@@ -124,11 +117,15 @@ def train_model():
         formatter=custom_formatter 
     )
 
-    # 5. Initialize Model
+    # 6. Initialize Model & Load Pre-trained Weights
     tokenizer, config = TTSTokenizer.init_from_config(config)
     model = Vits(config, ap, tokenizer, speaker_manager=None)
+    
+    print(" -> Loading pre-trained weights...")
+    # This loads the weights from the file into our model object
+    model.load_checkpoint(config, pretrained_model_path, strict=False)
 
-    # 6. Initialize Trainer
+    # 7. Initialize Trainer
     trainer = Trainer(
         TrainerArgs(),
         config,
@@ -138,8 +135,8 @@ def train_model():
         eval_samples=eval_samples,
     )
 
-    # 7. Start Training
-    print("Starting training... (This may take a while)")
+    # 8. Start Training
+    print("Starting Fine-Tuning...")
     trainer.fit()
 
 if __name__ == "__main__":
