@@ -1,19 +1,25 @@
 import os
-import shutil
 from trainer import Trainer, TrainerArgs
 from TTS.tts.configs.shared_configs import BaseDatasetConfig
 from TTS.tts.configs.vits_config import VitsConfig
+from TTS.config import load_config
 from TTS.tts.datasets import load_tts_samples
 from TTS.tts.models.vits import Vits
 from TTS.tts.utils.text.tokenizer import TTSTokenizer
 from TTS.utils.audio import AudioProcessor
-from TTS.utils.manage import ModelManager
 
 # --- Configuration ---
 dataset_path = os.path.join(os.getcwd(), "audio_data/dataset")
 output_path = os.path.join(os.getcwd(), "models/voice_model")
-# New: Define a specific folder for phoneme cache
 cache_path = os.path.join(os.getcwd(), "audio_data/phoneme_cache")
+
+# ==========================================
+#  PASTE YOUR PATHS HERE TO RESUME TRAINING
+# ==========================================
+# Example: "/home/ubuntu/.../run-date/checkpoint_1687.pth"
+PREVIOUS_CHECKPOINT = "/home/ubuntu/digital_twin_project/models/voice_model/run-December-07-2025_10+03AM-7c0e791/checkpoint_1687.pth"
+PREVIOUS_CONFIG     = "/home/ubuntu/digital_twin_project/models/voice_model/run-December-07-2025_10+03AM-7c0e791/config.json"
+# ==========================================
 
 # Ensure output and cache directories exist
 os.makedirs(output_path, exist_ok=True)
@@ -63,50 +69,27 @@ def custom_formatter(root_path, manifest_file, **kwargs):
                 })
     return items
 
-def download_pretrained_model():
-    """Downloads the standard LJSpeech VITS model to get the weights file."""
-    print(" -> Downloading pre-trained VITS model (LJSpeech)...")
-    manager = ModelManager()
-    model_name = "tts_models/en/ljspeech/vits"
-    model_path, config_path, _ = manager.download_model(model_name)
-    return model_path
-
 def train_model():
-    print(f"Initializing Fine-Tuning using dataset at: {dataset_path}")
+    print(f"Resuming training from: {PREVIOUS_CHECKPOINT}")
 
-    # 1. Get the path to the pre-trained weights
-    pretrained_model_path = download_pretrained_model()
-    print(f" -> Base model weights found at: {pretrained_model_path}")
-
-    # 2. Define Dataset Configuration
+    # 1. Define Dataset Configuration
     dataset_config = BaseDatasetConfig(
         formatter="ljspeech", 
         meta_file_train="metadata.csv",
         path=dataset_path
     )
 
-    # 3. Define VITS Configuration explicitly
-    config = VitsConfig(
-        batch_size=8,
-        epochs=100,
-        print_step=5,
-        eval_split_size=0.1,
-        print_eval=False,
-        mixed_precision=True,
-        output_path=output_path,
-        datasets=[dataset_config],
-        cudnn_benchmark=False,
-        test_sentences=[
-            "Hello, this is my digital twin speaking.",
-            "I can generate new audio from text now."
-        ],
-        # --- CRITICAL SETTINGS FOR COMPATIBILITY ---
-        phonemizer="espeak",        
-        use_phonemes=True,          
-        phoneme_language="en-us",
-        phoneme_cache_path=cache_path  # <--- ADDED THIS LINE
-    )
+    # 2. Load the configuration from the PREVIOUS RUN
+    # This ensures we keep the same phoneme settings and structure
+    config = load_config(PREVIOUS_CONFIG)
 
+    # 3. Update settings for the new run
+    config.output_path = output_path
+    config.datasets = [dataset_config]
+    config.batch_size = 8
+    config.epochs = 100         # Total target epochs
+    config.phoneme_cache_path = cache_path
+    
     # 4. Initialize Audio Processor
     ap = AudioProcessor.init_from_config(config)
 
@@ -114,8 +97,8 @@ def train_model():
     train_samples, eval_samples = load_tts_samples(
         dataset_config,
         eval_split=True,
-        eval_split_max_size=config.eval_split_size,
-        eval_split_size=config.eval_split_size,
+        eval_split_max_size=0.1,
+        eval_split_size=0.1,
         formatter=custom_formatter 
     )
 
@@ -123,12 +106,9 @@ def train_model():
     tokenizer, config = TTSTokenizer.init_from_config(config)
     model = Vits(config, ap, tokenizer, speaker_manager=None)
     
-    print(" -> Loading pre-trained weights (Transfer Learning)...")
-    try:
-        model.load_checkpoint(config, pretrained_model_path, strict=False)
-        print(" -> Weights loaded successfully!")
-    except Exception as e:
-        print(f" -> Warning during weight loading: {e}")
+    print(" -> Loading previous checkpoint weights...")
+    # Load the weights from your specific checkpoint
+    model.load_checkpoint(config, PREVIOUS_CHECKPOINT, strict=False)
 
     # 7. Initialize Trainer
     trainer = Trainer(
@@ -141,8 +121,12 @@ def train_model():
     )
 
     # 8. Start Training
-    print("Starting Fine-Tuning...")
+    print("Starting Continued Training...")
     trainer.fit()
 
 if __name__ == "__main__":
-    train_model()
+    if not os.path.exists(PREVIOUS_CHECKPOINT):
+        print(f"ERROR: Checkpoint not found at {PREVIOUS_CHECKPOINT}")
+        print("Please edit the script and paste the correct path.")
+    else:
+        train_model()
