@@ -3,92 +3,76 @@ import glob
 import torch
 from TTS.utils.synthesizer import Synthesizer
 
+# ==========================================
+# 🎛️ INFERENCE TUNING KNOBS (Fix the Robot)
+# ==========================================
+# Speed: 1.0 is normal. 1.1 is slightly slower (often clearer).
+LENGTH_SCALE = 1.1  
+
+# Emotion/Randomness: 0.667 is standard. 
+# If too flat/robotic, try 0.8. If too static/buzzy, try 0.5.
+NOISE_SCALE = 0.667 
+
+# Pronunciation Variance: 0.8 is standard.
+NOISE_SCALE_W = 0.8
+# ==========================================
+
 # --- Configuration ---
 project_root = os.getcwd()
 image_path = os.path.join(project_root, "image_data", "my_face2.jpg")
 output_folder = os.path.join(project_root, "outputs")
 voice_model_dir = os.path.join(project_root, "models/voice_model")
 
-# ==============================================================================
-# OPTIONAL: Force a specific model if the "latest" one sounds bad.
-# Example: "/home/ubuntu/digital_twin_project/models/voice_model/run-X/checkpoint_96.pth"
-# Leave as None to auto-detect the latest best model.
-# ==============================================================================
-MANUAL_CHECKPOINT_PATH = None
-MANUAL_CONFIG_PATH = None 
-# ==============================================================================
-
 # Ensure output directory exists
 os.makedirs(output_folder, exist_ok=True)
 
 def get_best_model_path():
     """
-    Finds the best checkpoint in the voice_model folder.
-    Prioritizes:
-    1. Manual paths set above.
-    2. 'best_model.pth' in the most recent run folder.
-    3. The highest numbered 'checkpoint_X.pth' in the most recent run folder.
+    Automatically finds the latest run and the best_model.pth within it.
     """
-    
-    # 1. Check Manual Override
-    if MANUAL_CHECKPOINT_PATH and MANUAL_CONFIG_PATH:
-        if os.path.exists(MANUAL_CHECKPOINT_PATH) and os.path.exists(MANUAL_CONFIG_PATH):
-            print(f"-> Using manually defined model: {os.path.basename(MANUAL_CHECKPOINT_PATH)}")
-            return MANUAL_CHECKPOINT_PATH, MANUAL_CONFIG_PATH
-        else:
-            print(f"Warning: Manual paths defined but not found. Falling back to auto-search.")
-
-    # 2. Find all run folders
+    # 1. Find all run folders
     run_folders = glob.glob(os.path.join(voice_model_dir, "*run*"))
     if not run_folders:
-        print("No training run found. Have you run scripts/train_voice.py?")
+        print("❌ Error: No training runs found in models/voice_model/")
         return None, None
     
-    # Sort runs by time (Newest first)
+    # 2. Sort runs by time (Newest first)
     run_folders.sort(key=os.path.getmtime, reverse=True)
+    latest_run = run_folders[0]
+    
+    # 3. Define paths
+    model_path = os.path.join(latest_run, "best_model.pth")
+    config_path = os.path.join(latest_run, "config.json")
 
-    # 3. Iterate through runs to find a valid model
-    for run in run_folders:
-        config = os.path.join(run, "config.json")
-        if not os.path.exists(config):
-            continue
-            
-        # A. Look for 'best_model.pth' (Created by Trainer if eval improves)
-        best_model = os.path.join(run, "best_model.pth")
-        if os.path.exists(best_model):
-            print(f"-> Found best_model.pth in {os.path.basename(run)}")
-            return best_model, config
-        
-        # B. Fallback: Find highest numbered checkpoint (e.g. checkpoint_100.pth)
-        checkpoints = glob.glob(os.path.join(run, "checkpoint_*.pth"))
+    # 4. Fallback if best_model doesn't exist yet (e.g. run just started)
+    if not os.path.exists(model_path):
+        print(f"⚠️  'best_model.pth' not found in {os.path.basename(latest_run)}.")
+        print("   Looking for latest checkpoint...")
+        checkpoints = glob.glob(os.path.join(latest_run, "checkpoint_*.pth"))
         if checkpoints:
-            # Sort by the number in the filename
-            try:
-                latest_ckpt = max(checkpoints, key=lambda p: int(p.split('_')[-1].split('.')[0]))
-                print(f"-> Found latest checkpoint {os.path.basename(latest_ckpt)} in {os.path.basename(run)}")
-                return latest_ckpt, config
-            except ValueError:
-                continue
+            model_path = max(checkpoints, key=os.path.getmtime)
+        else:
+            print("❌ Error: No checkpoints found.")
+            return None, None
 
-    print("Error: Could not find any valid .pth checkpoints in recent runs.")
-    return None, None
+    print(f"✅ Selected Model: {os.path.basename(latest_run)}/{os.path.basename(model_path)}")
+    return model_path, config_path
 
 def generate_digital_twin(text_prompt):
-    print(f"--- 1. Processing Input Image ---")
+    print(f"\n--- 1. Processing Input Image ---")
     if not os.path.exists(image_path):
-        print(f"Error: Could not find image at {image_path}")
+        print(f"❌ Error: Could not find image at {image_path}")
         return
-    print(f"Using face image: {image_path}")
+    print(f"Using face image: {os.path.basename(image_path)}")
 
     print(f"--- 2. Generating Audio ---")
     model_path, config_path = get_best_model_path()
     
     if not model_path:
-        print("Error: Could not find trained model.")
         return
 
-    print(f"Loading voice model from: {model_path}")
-    
+    print("Loading Synthesizer... (this may take a moment)")
+    # Initialize the Coqui Synthesizer
     synthesizer = Synthesizer(
         tts_checkpoint=model_path,
         tts_config_path=config_path,
@@ -97,28 +81,38 @@ def generate_digital_twin(text_prompt):
 
     output_audio_path = os.path.join(output_folder, "generated_speech.wav")
     
-    # Generate speech
-    wav = synthesizer.tts(text_prompt)
+    # Generate speech with Custom Knobs
+    # We pass the VITS parameters as kwargs
+    wav = synthesizer.tts(
+        text_prompt,
+        length_scale=LENGTH_SCALE,
+        noise_scale=NOISE_SCALE,
+        noise_scale_w=NOISE_SCALE_W
+    )
+    
+    # Save the file
     synthesizer.save_wav(wav, output_audio_path)
-    print(f"Audio saved to: {output_audio_path}")
+    print(f"✅ Audio saved to: {output_audio_path}")
+    print(f"   (Settings: Speed={LENGTH_SCALE}, Noise={NOISE_SCALE})")
 
-    print(f"--- 3. Lip Syncing (Animation) ---")
+    print(f"\n--- 3. Lip Syncing (Animation) ---")
     output_video_path = os.path.join(output_folder, "final_result.mp4")
     
+    # Added --resize_factor 1 to improve face quality
     wav2lip_cmd = (
         f"python3 Wav2Lip/inference.py "
         f"--checkpoint_path Wav2Lip/checkpoints/wav2lip_gan.pth "
         f"--face {image_path} "
         f"--audio {output_audio_path} "
         f"--outfile {output_video_path} "
-        f"--resize_factor 1" 
+        f"--resize_factor 1"
     )
     
-    print("\nTo animate the face, run this command in your 'venv_video' terminal:")
-    print("-" * 50)
+    print("To animate the face, copy/paste this command into your terminal:")
+    print("-" * 60)
     print(wav2lip_cmd)
-    print("-" * 50)
+    print("-" * 60)
 
 if __name__ == "__main__":
-    text = input("Enter the text for your digital twin to speak: ")
+    text = input("\n🗣️  Enter text for your Digital Twin: ")
     generate_digital_twin(text)
