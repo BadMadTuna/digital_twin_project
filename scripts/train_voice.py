@@ -94,11 +94,26 @@ def train_model():
 # Update the top-level variable
     config.lr = 0.00005 
     
-    # ALSO update the internal dictionary (This is the one ignoring you!)
+# --- ☢️ THE NUCLEAR LR FIX ☢️ ---
+    # We must override specific VITS parameters, not just the global one.
+    NEW_LR = 0.00005  # 5e-5
+
+    # 1. Global setting
+    config.lr = NEW_LR
+    
+    # 2. VITS-specific settings (These are the ones forcing it to 0.0002!)
+    if hasattr(config, "lr_gen"):
+        config.lr_gen = NEW_LR
+        print(f" -> FORCED config.lr_gen to {NEW_LR}")
+        
+    if hasattr(config, "lr_disc"):
+        config.lr_disc = NEW_LR
+        print(f" -> FORCED config.lr_disc to {NEW_LR}")
+
+    # 3. Clear optimizer params just in case
     if hasattr(config, "optimizer_params"):
         if "lr" in config.optimizer_params:
             del config.optimizer_params["lr"]
-            print(" -> REMOVED 'lr' from optimizer_params to prevent conflict.")
     
     # 4. Initialize Audio Processor
     ap = AudioProcessor.init_from_config(config)
