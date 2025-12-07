@@ -1,4 +1,5 @@
 import os
+import shutil
 from trainer import Trainer, TrainerArgs
 from TTS.tts.configs.shared_configs import BaseDatasetConfig
 from TTS.tts.configs.vits_config import VitsConfig
@@ -11,9 +12,12 @@ from TTS.utils.manage import ModelManager
 # --- Configuration ---
 dataset_path = os.path.join(os.getcwd(), "audio_data/dataset")
 output_path = os.path.join(os.getcwd(), "models/voice_model")
+# New: Define a specific folder for phoneme cache
+cache_path = os.path.join(os.getcwd(), "audio_data/phoneme_cache")
 
-# Ensure output directory exists
+# Ensure output and cache directories exist
 os.makedirs(output_path, exist_ok=True)
+os.makedirs(cache_path, exist_ok=True)
 
 def custom_formatter(root_path, manifest_file, **kwargs):
     """
@@ -82,8 +86,6 @@ def train_model():
     )
 
     # 3. Define VITS Configuration explicitly
-    # We manually set these to match LJSpeech so shapes align,
-    # but we use a fresh VitsConfig so the Discriminator is correctly built.
     config = VitsConfig(
         batch_size=8,
         epochs=100,
@@ -99,9 +101,10 @@ def train_model():
             "I can generate new audio from text now."
         ],
         # --- CRITICAL SETTINGS FOR COMPATIBILITY ---
-        phonemizer="espeak",        # LJSpeech uses espeak
-        use_phonemes=True,          # LJSpeech uses phonemes
-        phoneme_language="en-us"    # English US
+        phonemizer="espeak",        
+        use_phonemes=True,          
+        phoneme_language="en-us",
+        phoneme_cache_path=cache_path  # <--- ADDED THIS LINE
     )
 
     # 4. Initialize Audio Processor
@@ -117,17 +120,15 @@ def train_model():
     )
 
     # 6. Initialize Model 
-    # Since we used VitsConfig() directly, this will create the 'disc' (discriminator)
     tokenizer, config = TTSTokenizer.init_from_config(config)
     model = Vits(config, ap, tokenizer, speaker_manager=None)
     
     print(" -> Loading pre-trained weights (Transfer Learning)...")
-    # strict=False allows us to ignore minor differences in non-critical layers
     try:
         model.load_checkpoint(config, pretrained_model_path, strict=False)
         print(" -> Weights loaded successfully!")
     except Exception as e:
-        print(f" -> Warning during weight loading (usually safe to ignore if training starts): {e}")
+        print(f" -> Warning during weight loading: {e}")
 
     # 7. Initialize Trainer
     trainer = Trainer(
