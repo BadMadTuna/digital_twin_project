@@ -1,7 +1,7 @@
 import os
-import torch
 import glob
-from TTS.api import TTS
+import torch
+from TTS.utils.synthesizer import Synthesizer
 
 # --- Configuration ---
 project_root = os.getcwd()
@@ -14,7 +14,6 @@ os.makedirs(output_folder, exist_ok=True)
 
 def get_best_model_path():
     """Finds the best checkpoint in the voice_model folder."""
-    # Look for the folder created by the trainer (usually date-stamped)
     run_folders = glob.glob(os.path.join(voice_model_dir, "*run*"))
     if not run_folders:
         print("No training run found. Have you run scripts/train_voice.py?")
@@ -40,25 +39,31 @@ def generate_digital_twin(text_prompt):
     model_path, config_path = get_best_model_path()
     
     if not model_path:
-        print("Using default TTS (Training not complete).")
-        # Fallback to generic TTS if training isn't done
-        tts = TTS("tts_models/en/ljspeech/vits")
-    else:
-        print(f"Loading custom voice from: {model_path}")
-        tts = TTS(model_path=model_path, config_path=config_path, progress_bar=True, gpu=True)
+        print("Error: Could not find trained model.")
+        return
+
+    print(f"Loading custom voice from: {model_path}")
+    
+    # FIX: Use Synthesizer instead of TTS() wrapper
+    # This bypasses the attribute errors for custom models
+    synthesizer = Synthesizer(
+        tts_checkpoint=model_path,
+        tts_config_path=config_path,
+        use_cuda=torch.cuda.is_available()
+    )
 
     output_audio_path = os.path.join(output_folder, "generated_speech.wav")
     
     # Generate speech
-    tts.tts_to_file(text=text_prompt, file_path=output_audio_path)
+    # The synthesizer returns a list of audio values
+    wav = synthesizer.tts(text_prompt)
+    
+    # Save the file
+    synthesizer.save_wav(wav, output_audio_path)
     print(f"Audio saved to: {output_audio_path}")
 
     print(f"--- 3. Lip Syncing (Animation) ---")
-    output_video_path = os.path.join(output_folder, "final_twin.mp4")
-    
-    # NOTE: This assumes a Wav2Lip inference script is available.
-    # If running locally, you typically call the inference.py from the Wav2Lip repo.
-    # We will construct the command for you to run, or run it if configured.
+    output_video_path = os.path.join(output_folder, "final_result.mp4")
     
     wav2lip_cmd = (
         f"python3 Wav2Lip/inference.py "
@@ -68,15 +73,9 @@ def generate_digital_twin(text_prompt):
         f"--outfile {output_video_path}"
     )
     
-    print("\nTo animate the face, ensure you have Wav2Lip cloned and checkpoints downloaded.")
-    print("Run the following command:\n")
+    print("\nTo animate the face (Lip Sync), run the following command manually")
+    print("inside your 'venv_video' environment:\n")
     print(wav2lip_cmd)
-    
-    # Optional: Automatically run it if Wav2Lip is present
-    if os.path.exists("Wav2Lip/inference.py"):
-        print("\nWav2Lip found! Executing lip sync...")
-        os.system(wav2lip_cmd)
-        print(f"\nVideo generated at: {output_video_path}")
 
 if __name__ == "__main__":
     text = input("Enter the text for your digital twin to speak: ")
