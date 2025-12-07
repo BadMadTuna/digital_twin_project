@@ -16,8 +16,8 @@ cache_path = os.path.join(os.getcwd(), "audio_data/phoneme_cache")
 # ==========================================
 #  UPDATE PATH TO YOUR LATEST CHECKPOINT (EPOCH 25/75)
 # ==========================================
-PREVIOUS_CHECKPOINT = "/home/ubuntu/digital_twin_project/models/voice_model/run-December-07-2025_11+08AM-7966162/best_model.pth" 
-PREVIOUS_CONFIG     = "/home/ubuntu/digital_twin_project/models/voice_model/run-December-07-2025_11+08AM-7966162/config.json"
+PREVIOUS_CHECKPOINT = "/home/ubuntu/digital_twin_project/models/voice_model/run-December-07-2025_12+37PM-0a660d2/best_model.pth" 
+PREVIOUS_CONFIG     = "/home/ubuntu/digital_twin_project/models/voice_model/run-December-07-2025_12+37PM-0a660d2/config.json"
 # ==========================================
 
 # Ensure output and cache directories exist
@@ -85,18 +85,18 @@ def train_model():
     config.output_path = output_path
     config.datasets = [dataset_config]
     config.batch_size = 8
-    config.epochs = 100         # Give it time to settle
+    config.epochs = 200         # Give it time to settle
     config.phoneme_cache_path = cache_path
     
     # --- CRITICAL: LOWER THE LEARNING RATE ---
     # Default is 2e-4 (0.0002). We set it to 5e-5 (0.00005).
     # This prevents the model from "overshooting" and helps smooth out robotic noise.
 # Update the top-level variable
-    config.lr = 0.00005 
+    config.lr = 0.00001 
     
 # --- ☢️ THE NUCLEAR LR FIX ☢️ ---
     # We must override specific VITS parameters, not just the global one.
-    NEW_LR = 0.00005  # 5e-5
+    NEW_LR = 0.00001  # 5e-5
 
     # 1. Global setting
     config.lr = NEW_LR
