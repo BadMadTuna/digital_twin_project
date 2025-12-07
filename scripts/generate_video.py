@@ -7,11 +7,11 @@ from TTS.utils.synthesizer import Synthesizer
 # 🎛️ INFERENCE TUNING KNOBS (Fix the Robot)
 # ==========================================
 # Speed: 1.0 is normal. 1.1 is slightly slower (often clearer).
-LENGTH_SCALE = 1.1  
+LENGTH_SCALE = 1.2  
 
 # Emotion/Randomness: 0.667 is standard. 
 # If too flat/robotic, try 0.8. If too static/buzzy, try 0.5.
-NOISE_SCALE = 0.667 
+NOISE_SCALE = 0.5 
 
 # Pronunciation Variance: 0.8 is standard.
 NOISE_SCALE_W = 0.8
