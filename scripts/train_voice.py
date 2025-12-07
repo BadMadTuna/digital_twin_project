@@ -87,7 +87,7 @@ def train_model():
     config.output_path = output_path
     config.datasets = [dataset_config]
     config.batch_size = 8
-    config.epochs = 100         # Total target epochs
+    config.epochs = 50         # Total target epochs
     config.phoneme_cache_path = cache_path
     
     # 4. Initialize Audio Processor
