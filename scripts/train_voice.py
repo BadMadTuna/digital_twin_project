@@ -95,7 +95,7 @@ def train_model():
     config.lr = 0.00005 
     
     # ALSO update the internal dictionary (This is the one ignoring you!)
-if hasattr(config, "optimizer_params"):
+    if hasattr(config, "optimizer_params"):
         if "lr" in config.optimizer_params:
             del config.optimizer_params["lr"]
             print(" -> REMOVED 'lr' from optimizer_params to prevent conflict.")
