@@ -14,11 +14,10 @@ output_path = os.path.join(os.getcwd(), "models/voice_model")
 cache_path = os.path.join(os.getcwd(), "audio_data/phoneme_cache")
 
 # ==========================================
-#  PASTE YOUR PATHS HERE TO RESUME TRAINING
+#  UPDATE PATH TO YOUR LATEST CHECKPOINT (EPOCH 25/75)
 # ==========================================
-# Example: "/home/ubuntu/.../run-date/checkpoint_1687.pth"
-PREVIOUS_CHECKPOINT = "/home/ubuntu/digital_twin_project/models/voice_model/run-December-07-2025_10+03AM-7c0e791/checkpoint_1687.pth"
-PREVIOUS_CONFIG     = "/home/ubuntu/digital_twin_project/models/voice_model/run-December-07-2025_10+03AM-7c0e791/config.json"
+PREVIOUS_CHECKPOINT = "/home/ubuntu/digital_twin_project/models/voice_model/run-December-07-2025_10+33AM-51b7c19/checkpoint_25.pth"
+PREVIOUS_CONFIG     = "/home/ubuntu/digital_twin_project/models/voice_model/run-December-07-2025_10+33AM-51b7c19/config.json"
 # ==========================================
 
 # Ensure output and cache directories exist
@@ -70,7 +69,7 @@ def custom_formatter(root_path, manifest_file, **kwargs):
     return items
 
 def train_model():
-    print(f"Resuming training from: {PREVIOUS_CHECKPOINT}")
+    print(f"Resuming with Low Learning Rate from: {PREVIOUS_CHECKPOINT}")
 
     # 1. Define Dataset Configuration
     dataset_config = BaseDatasetConfig(
@@ -80,15 +79,19 @@ def train_model():
     )
 
     # 2. Load the configuration from the PREVIOUS RUN
-    # This ensures we keep the same phoneme settings and structure
     config = load_config(PREVIOUS_CONFIG)
 
-    # 3. Update settings for the new run
+    # 3. Update settings for the "Cool Down" run
     config.output_path = output_path
     config.datasets = [dataset_config]
     config.batch_size = 8
-    config.epochs = 50         # Total target epochs
+    config.epochs = 100         # Give it time to settle
     config.phoneme_cache_path = cache_path
+    
+    # --- CRITICAL: LOWER THE LEARNING RATE ---
+    # Default is 2e-4 (0.0002). We set it to 5e-5 (0.00005).
+    # This prevents the model from "overshooting" and helps smooth out robotic noise.
+    config.lr = 0.00005 
     
     # 4. Initialize Audio Processor
     ap = AudioProcessor.init_from_config(config)
@@ -107,7 +110,6 @@ def train_model():
     model = Vits(config, ap, tokenizer, speaker_manager=None)
     
     print(" -> Loading previous checkpoint weights...")
-    # Load the weights from your specific checkpoint
     model.load_checkpoint(config, PREVIOUS_CHECKPOINT, strict=False)
 
     # 7. Initialize Trainer
@@ -121,12 +123,12 @@ def train_model():
     )
 
     # 8. Start Training
-    print("Starting Continued Training...")
+    print("Starting Cool-Down Training...")
     trainer.fit()
 
 if __name__ == "__main__":
     if not os.path.exists(PREVIOUS_CHECKPOINT):
         print(f"ERROR: Checkpoint not found at {PREVIOUS_CHECKPOINT}")
-        print("Please edit the script and paste the correct path.")
+        print("Please edit the script and check the path.")
     else:
         train_model()
