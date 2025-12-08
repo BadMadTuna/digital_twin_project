@@ -1,5 +1,6 @@
 import os
 import torch
+import soundfile as sf  # Required for the patch
 from trainer import Trainer, TrainerArgs
 from TTS.tts.configs.shared_configs import BaseDatasetConfig
 from TTS.tts.configs.vits_config import VitsConfig
@@ -9,17 +10,43 @@ from TTS.tts.utils.text.tokenizer import TTSTokenizer
 from TTS.utils.audio import AudioProcessor
 from TTS.utils.manage import ModelManager 
 
-import torchaudio
-try:
-    torchaudio.set_audio_backend("soundfile")
-    print("✅ Forced audio backend to: soundfile")
-except Exception as e:
-    print(f"⚠️ Warning: Could not force 'soundfile' backend: {e}")
+# ==========================================================
+# === 🚑 THE MONKEYPATCH (Fixes Torchaudio/TorchCodec Error) ===
+# ==========================================================
+import TTS.tts.models.vits as vits_module
+
+def patched_load_audio(file_path):
+    """
+    Replacement for the broken torchaudio.load.
+    Uses soundfile directly to read wavs as Float32 tensors.
+    """
+    # 1. Read wav using soundfile
+    wav_numpy, sr = sf.read(file_path)
+    
+    # 2. Ensure float32
+    wav_numpy = wav_numpy.astype("float32")
+    
+    # 3. Convert to Tensor
+    wav_tensor = torch.from_numpy(wav_numpy)
+    
+    # 4. Fix Dimensions: (Time) -> (1, Time) or (Time, Channels) -> (Channels, Time)
+    if wav_tensor.dim() == 1:
+        wav_tensor = wav_tensor.unsqueeze(0)
+    else:
+        wav_tensor = wav_tensor.transpose(0, 1)
+        
+    return wav_tensor, sr
+
+# Apply the patch immediately
+print("🚑 Applying 'load_audio' patch to bypass TorchCodec...")
+vits_module.load_audio = patched_load_audio
+# ==========================================================
+
 
 # --- PATHS ---
 project_root = os.getcwd()
 dataset_path = os.path.join(project_root, "audio_data/dataset")
-output_path = os.path.join(project_root, "models/voice_model_fixed") 
+output_path = os.path.join(project_root, "models/voice_model_fixed_v2") # v2 for safety
 cache_path = os.path.join(project_root, "audio_data/phoneme_cache")
 
 os.makedirs(output_path, exist_ok=True)
@@ -69,7 +96,7 @@ def train_fresh_large():
         path=dataset_path
     )
 
-    # 2. VITS Config (Initialize with defaults first)
+    # 2. VITS Config
     config = VitsConfig(
         batch_size=32,
         eval_batch_size=16,
@@ -85,22 +112,24 @@ def train_fresh_large():
         mixed_precision=True,
         output_path=output_path,
         datasets=[dataset_config],
+        
+        # --- WORKER SETTINGS ---
+        # If the patch still fails, change num_loader_workers to 0
         num_loader_workers=4, 
         num_eval_loader_workers=2,
+        
         lr=5e-5,       
         lr_gen=5e-5,   
         lr_disc=5e-5,  
         lr_scheduler=None, 
     )
 
-    # --- THE FIX: MANUALLY OVERRIDE AUDIO SETTINGS ---
-    # We set these directly on the config object to bypass the constructor error.
+    # --- MANUAL AUDIO OVERRIDES ---
     config.audio.sample_rate = 22050
-    config.audio.max_wav_value = 1.0   # <--- Forces Float (0.0 - 1.0) handling
+    config.audio.max_wav_value = 1.0  # Force Float handling
     config.audio.do_trim_silence = True
     config.audio.mel_fmin = 0
     config.audio.mel_fmax = None
-    # -------------------------------------------------
 
     # 3. Audio Processor
     ap = AudioProcessor.init_from_config(config)
@@ -130,7 +159,6 @@ def train_fresh_large():
     checkpoint = torch.load(model_path, map_location="cpu")
     model_state = checkpoint["model"]
 
-    # Remove mismatched embedding layer
     bad_keys = []
     for key in model_state.keys():
         if "text_encoder.emb.weight" in key:
@@ -141,7 +169,7 @@ def train_fresh_large():
         del model_state[key]
 
     model.load_state_dict(model_state, strict=False)
-    print(" -> Surgical load complete. Embeddings reset for UK English.")
+    print(" -> Surgical load complete.")
     # ------------------------------
 
     # 7. Initialize Trainer
@@ -154,7 +182,7 @@ def train_fresh_large():
         eval_samples=eval_samples,
     )
 
-    print("🚀 Starting FIXED Training Run...")
+    print("🚀 Starting FIXED V2 Training Run...")
     trainer.fit()
 
 if __name__ == "__main__":
