@@ -13,9 +13,9 @@ LIVE_CHECKPOINT = os.path.join(MODEL_DIR, "best_model.pth")
 LIVE_CONFIG     = os.path.join(MODEL_DIR, "config.json")
 
 # Tuning
-LENGTH_SCALE = 1.1 
-NOISE_SCALE = 0.667 
-NOISE_SCALE_W = 0.8
+LENGTH_SCALE = 0.95 
+NOISE_SCALE = 0.8 
+NOISE_SCALE_W = 0.9
 
 # Paths
 project_root = os.getcwd()
