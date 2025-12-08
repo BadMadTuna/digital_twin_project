@@ -118,9 +118,9 @@ def train_fresh_large():
         num_loader_workers=4, 
         num_eval_loader_workers=2,
         
-        lr=5e-5,       
-        lr_gen=5e-5,   
-        lr_disc=5e-5,  
+        lr=2e-4,       
+        lr_gen=2e-4,   
+        lr_disc=2e-4,  
         lr_scheduler=None, 
     )
 
