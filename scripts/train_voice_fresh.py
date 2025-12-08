@@ -12,7 +12,8 @@ from TTS.utils.manage import ModelManager
 # --- PATHS ---
 project_root = os.getcwd()
 dataset_path = os.path.join(project_root, "audio_data/dataset")
-output_path = os.path.join(project_root, "models/voice_model_fresh") 
+# We use a new folder "voice_model_large" to denote the 1.5h dataset
+output_path = os.path.join(project_root, "models/voice_model_large") 
 cache_path = os.path.join(project_root, "audio_data/phoneme_cache")
 
 os.makedirs(output_path, exist_ok=True)
@@ -45,7 +46,7 @@ def custom_formatter(root_path, manifest_file, **kwargs):
                 })
     return items
 
-def train_fresh():
+def train_fresh_large():
     # 1. Dataset Config
     dataset_config = BaseDatasetConfig(
         formatter="ljspeech", 
@@ -70,15 +71,12 @@ def train_fresh():
         output_path=output_path,
         datasets=[dataset_config],
         
-
-        # --- ☢️ THE NUCLEAR FIX (FRESH START VERSION) ---
-        # You must set ALL THREE to ensure it obeys you.
-        lr=5e-5,       # Global setting
-        lr_gen=5e-5,   # Generator specific (The one ignoring you)
-        lr_disc=5e-5,  # Discriminator specific (The other one ignoring you)
-        
-        # Disable scheduler to prevent "warmup" overrides
-        lr_scheduler=None,
+        # --- CONSTANT SPEED FOR STABILITY ---
+        # 5e-5 is perfect for this dataset size (1.5h)
+        lr=5e-5,       
+        lr_gen=5e-5,   
+        lr_disc=5e-5,  
+        lr_scheduler=None, 
     )
 
     # 3. Audio Processor
@@ -106,13 +104,10 @@ def train_fresh():
     print(f" -> Loading weights from: {model_path}")
     
     # --- SURGICAL LOADING BLOCK ---
-    # Load the checkpoint manually
     checkpoint = torch.load(model_path, map_location="cpu")
     model_state = checkpoint["model"]
 
-    # Remove the mismatched embedding layer
-    # This forces the model to learn British phonemes from scratch
-    # while keeping the pre-trained 'voice' intact.
+    # Remove mismatched embedding layer
     bad_keys = []
     for key in model_state.keys():
         if "text_encoder.emb.weight" in key:
@@ -122,7 +117,6 @@ def train_fresh():
         print(f"   ! Removing mismatched layer: {key}")
         del model_state[key]
 
-    # Load the rest of the weights
     model.load_state_dict(model_state, strict=False)
     print(" -> Surgical load complete. Embeddings reset for UK English.")
     # ------------------------------
@@ -137,8 +131,8 @@ def train_fresh():
         eval_samples=eval_samples,
     )
 
-    print("🚀 Starting FRESH Transfer Learning (British)...")
+    print("🚀 Starting LARGE DATASET Training...")
     trainer.fit()
 
 if __name__ == "__main__":
-    train_fresh()
+    train_fresh_large()
