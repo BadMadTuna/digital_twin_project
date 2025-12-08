@@ -9,6 +9,13 @@ from TTS.tts.utils.text.tokenizer import TTSTokenizer
 from TTS.utils.audio import AudioProcessor
 from TTS.utils.manage import ModelManager 
 
+import torchaudio
+try:
+    torchaudio.set_audio_backend("soundfile")
+    print("✅ Forced audio backend to: soundfile")
+except Exception as e:
+    print(f"⚠️ Warning: Could not force 'soundfile' backend: {e}")
+
 # --- PATHS ---
 project_root = os.getcwd()
 dataset_path = os.path.join(project_root, "audio_data/dataset")
