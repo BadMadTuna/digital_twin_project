@@ -1,4 +1,5 @@
 import os
+import torch
 from trainer import Trainer, TrainerArgs
 from TTS.tts.configs.shared_configs import BaseDatasetConfig
 from TTS.tts.configs.vits_config import VitsConfig
@@ -6,7 +7,7 @@ from TTS.tts.datasets import load_tts_samples
 from TTS.tts.models.vits import Vits
 from TTS.tts.utils.text.tokenizer import TTSTokenizer
 from TTS.utils.audio import AudioProcessor
-from TTS.utils.manage import ModelManager # Needed to download base model
+from TTS.utils.manage import ModelManager 
 
 # --- PATHS ---
 project_root = os.getcwd()
@@ -18,7 +19,6 @@ os.makedirs(output_path, exist_ok=True)
 os.makedirs(cache_path, exist_ok=True)
 
 def custom_formatter(root_path, manifest_file, **kwargs):
-    # (Same formatter code as before - keeping it brief here)
     items = []
     manifest_path = os.path.join(root_path, manifest_file)
     if not os.path.exists(manifest_path): return []
@@ -61,11 +61,7 @@ def train_fresh():
         epochs=1000, 
         text_cleaner="english_cleaners",
         use_phonemes=True,
-        
-        # ✅ FIX 1: UK ENGLISH
-        # Use "en-gb" for British pronunciation compatibility
-        phoneme_language="en-gb", 
-        
+        phoneme_language="en-gb", # British English
         phoneme_cache_path=cache_path,
         compute_input_seq_cache=True,
         print_step=25,
@@ -74,7 +70,7 @@ def train_fresh():
         output_path=output_path,
         datasets=[dataset_config],
         
-        # ✅ SCHEDULER (Kept from previous advice)
+        # Scheduler
         lr=2e-4, 
         lr_scheduler="StepLR", 
         lr_scheduler_params={"step_size": 10, "gamma": 0.9}, 
@@ -97,17 +93,36 @@ def train_fresh():
     tokenizer, config = TTSTokenizer.init_from_config(config)
     model = Vits(config, ap, tokenizer, speaker_manager=None)
 
-    # ✅ FIX 2: DOWNLOAD & LOAD BASE MODEL (LJSpeech)
-    # We load the weights, but NOT the optimizer states (strict=False).
-    # This gives us a smart brain, but a fresh training start.
+    # 6. DOWNLOAD & SURGICAL LOAD
     print("⬇️  Downloading/Loading LJSpeech base model...")
     manager = ModelManager()
     model_path, _, _ = manager.download_model("tts_models/en/ljspeech/vits")
     
     print(f" -> Loading weights from: {model_path}")
-    model.load_checkpoint(config, model_path, strict=False)
+    
+    # --- SURGICAL LOADING BLOCK ---
+    # Load the checkpoint manually
+    checkpoint = torch.load(model_path, map_location="cpu")
+    model_state = checkpoint["model"]
 
-    # 6. Initialize Trainer
+    # Remove the mismatched embedding layer
+    # This forces the model to learn British phonemes from scratch
+    # while keeping the pre-trained 'voice' intact.
+    bad_keys = []
+    for key in model_state.keys():
+        if "text_encoder.emb.weight" in key:
+            bad_keys.append(key)
+    
+    for key in bad_keys:
+        print(f"   ! Removing mismatched layer: {key}")
+        del model_state[key]
+
+    # Load the rest of the weights
+    model.load_state_dict(model_state, strict=False)
+    print(" -> Surgical load complete. Embeddings reset for UK English.")
+    # ------------------------------
+
+    # 7. Initialize Trainer
     trainer = Trainer(
         TrainerArgs(),
         config,
