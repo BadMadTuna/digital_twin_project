@@ -6,9 +6,9 @@ from TTS.tts.datasets import load_tts_samples
 from TTS.tts.models.vits import Vits
 from TTS.tts.utils.text.tokenizer import TTSTokenizer
 from TTS.utils.audio import AudioProcessor
+from TTS.utils.manage import ModelManager # Needed to download base model
 
 # --- PATHS ---
-# We use a NEW output folder to avoid mixing with old attempts
 project_root = os.getcwd()
 dataset_path = os.path.join(project_root, "audio_data/dataset")
 output_path = os.path.join(project_root, "models/voice_model_fresh") 
@@ -18,18 +18,14 @@ os.makedirs(output_path, exist_ok=True)
 os.makedirs(cache_path, exist_ok=True)
 
 def custom_formatter(root_path, manifest_file, **kwargs):
-    """ Reads metadata.csv with | or , delimiter """
+    # (Same formatter code as before - keeping it brief here)
     items = []
     manifest_path = os.path.join(root_path, manifest_file)
-    if not os.path.exists(manifest_path):
-        return []
+    if not os.path.exists(manifest_path): return []
     with open(manifest_path, "r", encoding="utf-8") as f:
         lines = f.readlines()
     if not lines: return []
-    
-    # Detect delimiter
     delimiter = "|" if "|" in lines[0] else ","
-    
     for line in lines:
         line = line.strip()
         if not line: continue
@@ -38,10 +34,8 @@ def custom_formatter(root_path, manifest_file, **kwargs):
             wav_filename = cols[0].strip()
             text = delimiter.join(cols[1:]).strip()
             wav_path = os.path.join(root_path, wav_filename)
-            # Handle wavs/ subdirectory
             if not os.path.exists(wav_path):
                 wav_path = os.path.join(root_path, "wavs", wav_filename)
-            
             if os.path.exists(wav_path):
                 items.append({
                     "text": text,
@@ -59,19 +53,19 @@ def train_fresh():
         path=dataset_path
     )
 
-    # 2. VITS Architecture Configuration
+    # 2. VITS Config
     config = VitsConfig(
         batch_size=8,
         eval_batch_size=4,
-        batch_group_size=4,
-        num_loader_workers=4,
-        num_eval_loader_workers=2,
         run_eval=True,
-        test_delay_epochs=-1,
-        epochs=1000,  # Set high, we rely on Early Stopping or Scheduler
+        epochs=1000, 
         text_cleaner="english_cleaners",
         use_phonemes=True,
-        phoneme_language="en-us",
+        
+        # ✅ FIX 1: UK ENGLISH
+        # Use "en-gb" for British pronunciation compatibility
+        phoneme_language="en-gb", 
+        
         phoneme_cache_path=cache_path,
         compute_input_seq_cache=True,
         print_step=25,
@@ -80,19 +74,13 @@ def train_fresh():
         output_path=output_path,
         datasets=[dataset_config],
         
-        # --- 🧠 THE SCHEDULER MAGIC ---
-        # Start at standard speed
+        # ✅ SCHEDULER (Kept from previous advice)
         lr=2e-4, 
-        
-        # Enable Scheduler
         lr_scheduler="StepLR", 
-        
-        # Decay: Every 10 epochs, multiply LR by 0.9 (slow down by 10%)
-        # By epoch 100, LR will be ~6e-5 (perfect for polishing)
         lr_scheduler_params={"step_size": 10, "gamma": 0.9}, 
     )
 
-    # 3. Initialize Audio
+    # 3. Audio Processor
     ap = AudioProcessor.init_from_config(config)
 
     # 4. Load Data
@@ -105,9 +93,19 @@ def train_fresh():
         formatter=custom_formatter
     )
 
-    # 5. Initialize Model (Fresh Weights)
+    # 5. Initialize Model
     tokenizer, config = TTSTokenizer.init_from_config(config)
     model = Vits(config, ap, tokenizer, speaker_manager=None)
+
+    # ✅ FIX 2: DOWNLOAD & LOAD BASE MODEL (LJSpeech)
+    # We load the weights, but NOT the optimizer states (strict=False).
+    # This gives us a smart brain, but a fresh training start.
+    print("⬇️  Downloading/Loading LJSpeech base model...")
+    manager = ModelManager()
+    model_path, _, _ = manager.download_model("tts_models/en/ljspeech/vits")
+    
+    print(f" -> Loading weights from: {model_path}")
+    model.load_checkpoint(config, model_path, strict=False)
 
     # 6. Initialize Trainer
     trainer = Trainer(
@@ -119,7 +117,7 @@ def train_fresh():
         eval_samples=eval_samples,
     )
 
-    print("🚀 Starting FRESH training with LR Scheduler...")
+    print("🚀 Starting FRESH Transfer Learning (British)...")
     trainer.fit()
 
 if __name__ == "__main__":
