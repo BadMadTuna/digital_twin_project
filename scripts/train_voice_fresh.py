@@ -1,7 +1,7 @@
 import os
 import torch
 from trainer import Trainer, TrainerArgs
-from TTS.tts.configs.shared_configs import BaseDatasetConfig, BaseAudioConfig # <--- Added BaseAudioConfig
+from TTS.tts.configs.shared_configs import BaseDatasetConfig
 from TTS.tts.configs.vits_config import VitsConfig
 from TTS.tts.datasets import load_tts_samples
 from TTS.tts.models.vits import Vits
@@ -12,7 +12,6 @@ from TTS.utils.manage import ModelManager
 # --- PATHS ---
 project_root = os.getcwd()
 dataset_path = os.path.join(project_root, "audio_data/dataset")
-# We use a new folder name to ensure a fresh start
 output_path = os.path.join(project_root, "models/voice_model_fixed") 
 cache_path = os.path.join(project_root, "audio_data/phoneme_cache")
 
@@ -34,24 +33,18 @@ def custom_formatter(root_path, manifest_file, **kwargs):
         lines = f.readlines()
         
     if not lines: return []
-    
-    # Detect delimiter
     delimiter = "|" if "|" in lines[0] else ","
     
     for line in lines:
         line = line.strip()
         if not line: continue
-        
         cols = line.split(delimiter)
         if len(cols) >= 2:
             wav_filename = cols[0].strip()
             text = delimiter.join(cols[1:]).strip()
-            
-            # support both direct path and 'wavs/' subdir
             wav_path = os.path.join(root_path, wav_filename)
             if not os.path.exists(wav_path):
                 wav_path = os.path.join(root_path, "wavs", wav_filename)
-            
             if os.path.exists(wav_path):
                 items.append({
                     "text": text,
@@ -69,22 +62,8 @@ def train_fresh_large():
         path=dataset_path
     )
 
-    # 2. Audio Config (THE FIX)
-    # This explicitly tells VITS how to handle your specific audio files
-    audio_config = BaseAudioConfig(
-        sample_rate=22050,      # Matched to your files
-        win_length=1024,        # Standard VITS
-        hop_length=256,         # Standard VITS
-        num_mels=80,            # Standard VITS
-        mel_fmin=0,
-        mel_fmax=None,
-        max_wav_value=1.0,      # <--- CRITICAL: Set to 1.0 for Float files
-        trim_silence=True       # Helps with alignment
-    )
-
-    # 3. VITS Config
+    # 2. VITS Config (Initialize with defaults first)
     config = VitsConfig(
-        audio=audio_config,     # <--- Injecting the audio config here
         batch_size=32,
         eval_batch_size=16,
         run_eval=True,
@@ -99,22 +78,27 @@ def train_fresh_large():
         mixed_precision=True,
         output_path=output_path,
         datasets=[dataset_config],
-
-        # Worker settings
         num_loader_workers=4, 
         num_eval_loader_workers=2,
-        
-        # Learning rates (conservative for stability)
         lr=5e-5,       
         lr_gen=5e-5,   
         lr_disc=5e-5,  
         lr_scheduler=None, 
     )
 
-    # 4. Audio Processor
+    # --- THE FIX: MANUALLY OVERRIDE AUDIO SETTINGS ---
+    # We set these directly on the config object to bypass the constructor error.
+    config.audio.sample_rate = 22050
+    config.audio.max_wav_value = 1.0   # <--- Forces Float (0.0 - 1.0) handling
+    config.audio.do_trim_silence = True
+    config.audio.mel_fmin = 0
+    config.audio.mel_fmax = None
+    # -------------------------------------------------
+
+    # 3. Audio Processor
     ap = AudioProcessor.init_from_config(config)
 
-    # 5. Load Data
+    # 4. Load Data
     print("Loading data samples...")
     train_samples, eval_samples = load_tts_samples(
         dataset_config,
@@ -124,11 +108,11 @@ def train_fresh_large():
         formatter=custom_formatter
     )
 
-    # 6. Initialize Model
+    # 5. Initialize Model
     tokenizer, config = TTSTokenizer.init_from_config(config)
     model = Vits(config, ap, tokenizer, speaker_manager=None)
 
-    # 7. DOWNLOAD & SURGICAL LOAD
+    # 6. DOWNLOAD & SURGICAL LOAD
     print("⬇️  Downloading/Loading LJSpeech base model...")
     manager = ModelManager()
     model_path, _, _ = manager.download_model("tts_models/en/ljspeech/vits")
@@ -153,7 +137,7 @@ def train_fresh_large():
     print(" -> Surgical load complete. Embeddings reset for UK English.")
     # ------------------------------
 
-    # 8. Initialize Trainer
+    # 7. Initialize Trainer
     trainer = Trainer(
         TrainerArgs(),
         config,
