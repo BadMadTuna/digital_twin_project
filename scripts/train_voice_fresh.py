@@ -56,8 +56,8 @@ def train_fresh_large():
 
     # 2. VITS Config
     config = VitsConfig(
-        batch_size=8,
-        eval_batch_size=4,
+        batch_size=32,
+        eval_batch_size=16,
         run_eval=True,
         epochs=1000, 
         text_cleaner="english_cleaners",
@@ -70,6 +70,11 @@ def train_fresh_large():
         mixed_precision=True,
         output_path=output_path,
         datasets=[dataset_config],
+
+        # Workers:
+        # g5.xlarge has 4 vCPUs. Set this to 4 to maximize CPU data loading.
+        num_loader_workers=4, 
+        num_eval_loader_workers=2,
         
         # --- CONSTANT SPEED FOR STABILITY ---
         # 5e-5 is perfect for this dataset size (1.5h)
