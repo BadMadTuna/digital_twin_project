@@ -70,10 +70,12 @@ def train_fresh():
         output_path=output_path,
         datasets=[dataset_config],
         
-        # Scheduler
-        lr=2e-4, 
-        lr_scheduler="StepLR", 
-        lr_scheduler_params={"step_size": 10, "gamma": 0.9}, 
+
+        # ✅ USE CONSTANT SAFE SPEED
+        # 5e-5 is the "Goldilocks" zone for VITS fine-tuning.
+        # It's fast enough to learn new embeddings, but safe for the decoder.
+        lr=5e-5, 
+        lr_scheduler=None,
     )
 
     # 3. Audio Processor
