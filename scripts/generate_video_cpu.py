@@ -6,7 +6,7 @@ from TTS.utils.synthesizer import Synthesizer
 
 # --- CONFIGURATION ---
 # UPDATE THIS to your best run folder
-MODEL_DIR = "/home/ubuntu/digital_twin_project/models/voice_model_fresh/run-December-08-2025_09+48AM-83efe94"
+MODEL_DIR = "/home/ubuntu/digital_twin_project/models/voice_model_large/run-December-08-2025_02+11PM-de2b618"
 
 # Try to find the specific best checkpoint if possible, otherwise standard best
 LIVE_CHECKPOINT = os.path.join(MODEL_DIR, "best_model.pth") 
