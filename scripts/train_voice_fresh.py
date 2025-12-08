@@ -71,10 +71,13 @@ def train_fresh():
         datasets=[dataset_config],
         
 
-        # ✅ USE CONSTANT SAFE SPEED
-        # 5e-5 is the "Goldilocks" zone for VITS fine-tuning.
-        # It's fast enough to learn new embeddings, but safe for the decoder.
-        lr=5e-5, 
+        # --- ☢️ THE NUCLEAR FIX (FRESH START VERSION) ---
+        # You must set ALL THREE to ensure it obeys you.
+        lr=5e-5,       # Global setting
+        lr_gen=5e-5,   # Generator specific (The one ignoring you)
+        lr_disc=5e-5,  # Discriminator specific (The other one ignoring you)
+        
+        # Disable scheduler to prevent "warmup" overrides
         lr_scheduler=None,
     )
 
