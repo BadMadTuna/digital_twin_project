@@ -2,13 +2,14 @@ import os
 import shutil
 import torch
 import numpy as np
-from scipy.io.wavfile import write
 from TTS.utils.synthesizer import Synthesizer
 
 # --- CONFIGURATION ---
-# Point to your active fresh run
+# UPDATE THIS to your best run folder
 MODEL_DIR = "/home/ubuntu/digital_twin_project/models/voice_model_fresh/run-December-08-2025_09+48AM-83efe94"
-LIVE_CHECKPOINT = os.path.join(MODEL_DIR, "best_model.pth")
+
+# Try to find the specific best checkpoint if possible, otherwise standard best
+LIVE_CHECKPOINT = os.path.join(MODEL_DIR, "best_model.pth") 
 LIVE_CONFIG     = os.path.join(MODEL_DIR, "config.json")
 
 # Tuning
@@ -22,22 +23,17 @@ image_path = os.path.join(project_root, "image_data", "my_face2.jpg")
 output_folder = os.path.join(project_root, "outputs")
 os.makedirs(output_folder, exist_ok=True)
 
-def trim_end_artifact(audio_array, sample_rate, trim_duration_sec=0.15):
-    """
-    Cuts the last X seconds to remove the TTS 'end-of-sequence' breath/click.
-    """
-    # Calculate how many samples to cut
-    samples_to_cut = int(sample_rate * trim_duration_sec)
-    
-    if len(audio_array) > samples_to_cut:
-        return audio_array[:-samples_to_cut]
-    return audio_array
-
 def generate_digital_twin(text_prompt):
     print(f"--- 1. Safe-Loading Model ---")
     
     # Copy model to avoid lock conflicts
     temp_model_path = os.path.join(output_folder, "temp_inference_model.pth")
+    # If the file is missing (training deleted it), warn the user
+    if not os.path.exists(LIVE_CHECKPOINT):
+        print(f"❌ Error: {LIVE_CHECKPOINT} not found.")
+        print("   Did the trainer overwrite it? Check your folder for 'best_model_XXXX.pth'")
+        return
+        
     shutil.copy(LIVE_CHECKPOINT, temp_model_path)
 
     print("-> Loading Synthesizer on CPU...")
@@ -50,7 +46,7 @@ def generate_digital_twin(text_prompt):
     print(f"--- 2. Generating Audio ---")
     output_audio_path = os.path.join(output_folder, "generated_speech_test.wav")
     
-    # Generate raw wav
+    # Generate raw wav (Returns a list of floats)
     wav = synthesizer.tts(
         text_prompt,
         length_scale=LENGTH_SCALE,
@@ -58,16 +54,20 @@ def generate_digital_twin(text_prompt):
         noise_scale_w=NOISE_SCALE_W
     )
     
-    # --- ✂️ THE FIX: TRIM THE ARTIFACT ---
-    # Convert to numpy if needed (TTS usually returns list or numpy)
-    wav_np = np.array(wav)
+    # --- ✂️ THE SAFE FIX ---
+    # Convert list to numpy for slicing
+    # We trim based on sample rate (e.g., 22050 samples = 1 second)
+    sr = synthesizer.output_sample_rate
+    trim_seconds = 0.15
+    trim_samples = int(sr * trim_seconds)
     
-    # Trim the last 0.15 seconds (adjust if the 'ugh' is longer)
-    wav_clean = trim_end_artifact(wav_np, synthesizer.output_sample_rate, trim_duration_sec=0.15)
+    # Slice the list/array
+    if len(wav) > trim_samples:
+        wav = wav[:-trim_samples]
     
-    # Save cleaned audio
-    synthesizer.save_wav(wav_clean, output_audio_path)
-    print(f"✅ Audio saved (Trimmed): {output_audio_path}")
+    # Use Coqui's internal saver (Handles headers/speed correctly)
+    synthesizer.save_wav(wav, output_audio_path)
+    print(f"✅ Audio saved (Correctly Encoded): {output_audio_path}")
     
     # Cleanup
     if os.path.exists(temp_model_path):
