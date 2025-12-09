@@ -13,7 +13,7 @@ LIVE_CHECKPOINT = os.path.join(MODEL_DIR, "checkpoint_30000.pth")
 LIVE_CONFIG     = os.path.join(MODEL_DIR, "config.json")
 
 # --- STANDARD VITS DEFAULTS ---
-LENGTH_SCALE = 1.1   # Speed (1.0 = Normal)
+LENGTH_SCALE = 1.0   # Speed (1.0 = Normal)
 NOISE_SCALE = 0.667  # Randomness/Emotion (Standard)
 NOISE_SCALE_W = 0.8  # Pronunciation Variance (Standard)
 
