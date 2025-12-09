@@ -9,7 +9,7 @@ MODEL_DIR = "/home/ubuntu/digital_twin_project/models/voice_model/run-December-0
 
 # Checkpoint paths
 #LIVE_CHECKPOINT = os.path.join(MODEL_DIR, "best_model.pth") 
-LIVE_CHECKPOINT = os.path.join(MODEL_DIR, "checkpoint_10000.pth") 
+LIVE_CHECKPOINT = os.path.join(MODEL_DIR, "checkpoint_20000.pth") 
 LIVE_CONFIG     = os.path.join(MODEL_DIR, "config.json")
 
 # --- STANDARD VITS DEFAULTS ---
