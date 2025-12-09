@@ -3,7 +3,7 @@ import csv
 import os
 
 # --- CONFIGURATION ---
-INPUT_LOG = "models/voice_model/run-December-09-2025_02+10PM-ddb314d/trainer_0_log.txt"
+INPUT_LOG = "models/voice_model/run-December-09-2025_03+49PM-8d1e3b8/trainer_0_log.txt"
 OUTPUT_CSV = "training_metrics.csv"
 
 def strip_ansi(text):
