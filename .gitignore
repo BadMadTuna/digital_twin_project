@@ -7,3 +7,5 @@ audio_data/attenborough_cut.mp4
 trainer_0_log.txt
 
 training_metrics.csv
+
+metadata.csv
