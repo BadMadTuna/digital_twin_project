@@ -1,6 +1,6 @@
 import os
 import torch
-import soundfile as sf  # Required for the patch
+import soundfile as sf
 from trainer import Trainer, TrainerArgs
 from TTS.tts.configs.shared_configs import BaseDatasetConfig
 from TTS.tts.configs.vits_config import VitsConfig
@@ -9,27 +9,20 @@ from TTS.tts.models.vits import Vits
 from TTS.tts.utils.text.tokenizer import TTSTokenizer
 from TTS.utils.audio import AudioProcessor
 from TTS.utils.manage import ModelManager 
-
-# ==========================================================
-# === 🚑 THE MONKEYPATCH (Fixes Torchaudio/TorchCodec Error) ===
-# ==========================================================
 import TTS.tts.models.vits as vits_module
 
+# ==========================================================
+# === 🚑 THE MONKEYPATCH (Bypasses TorchCodec errors) ===
+# ==========================================================
 def patched_load_audio(file_path):
     """
-    Replacement for the broken torchaudio.load.
-    Uses soundfile directly to read wavs as Float32 tensors.
+    Directly loads audio as Float32 using soundfile, ignoring Torchaudio issues.
     """
-    # 1. Read wav using soundfile
     wav_numpy, sr = sf.read(file_path)
-    
-    # 2. Ensure float32
     wav_numpy = wav_numpy.astype("float32")
-    
-    # 3. Convert to Tensor
     wav_tensor = torch.from_numpy(wav_numpy)
     
-    # 4. Fix Dimensions: (Time) -> (1, Time) or (Time, Channels) -> (Channels, Time)
+    # Fix Dimensions: (Time) -> (1, Time)
     if wav_tensor.dim() == 1:
         wav_tensor = wav_tensor.unsqueeze(0)
     else:
@@ -37,8 +30,7 @@ def patched_load_audio(file_path):
         
     return wav_tensor, sr
 
-# Apply the patch immediately
-print("🚑 Applying 'load_audio' patch to bypass TorchCodec...")
+print("🚑 Applying 'load_audio' patch...")
 vits_module.load_audio = patched_load_audio
 # ==========================================================
 
@@ -46,7 +38,7 @@ vits_module.load_audio = patched_load_audio
 # --- PATHS ---
 project_root = os.getcwd()
 dataset_path = os.path.join(project_root, "audio_data/dataset")
-output_path = os.path.join(project_root, "models/voice_model_fixed_v2") # v2 for safety
+output_path = os.path.join(project_root, "models/voice_model")  # <--- CHANGED: Simple folder
 cache_path = os.path.join(project_root, "audio_data/phoneme_cache")
 
 os.makedirs(output_path, exist_ok=True)
@@ -76,9 +68,11 @@ def custom_formatter(root_path, manifest_file, **kwargs):
         if len(cols) >= 2:
             wav_filename = cols[0].strip()
             text = delimiter.join(cols[1:]).strip()
+            
             wav_path = os.path.join(root_path, wav_filename)
             if not os.path.exists(wav_path):
                 wav_path = os.path.join(root_path, "wavs", wav_filename)
+            
             if os.path.exists(wav_path):
                 items.append({
                     "text": text,
@@ -88,11 +82,11 @@ def custom_formatter(root_path, manifest_file, **kwargs):
                 })
     return items
 
-def train_fresh_large():
+def train_fresh_final():
     # 1. Dataset Config
     dataset_config = BaseDatasetConfig(
         formatter="custom_formatter", 
-        meta_file_train="metadata.csv",
+        meta_file_train="metadata.csv", # <--- CHANGED: Back to standard name
         path=dataset_path
     )
 
@@ -113,23 +107,24 @@ def train_fresh_large():
         output_path=output_path,
         datasets=[dataset_config],
         
-        # --- WORKER SETTINGS ---
-        # If the patch still fails, change num_loader_workers to 0
+        # Workers
         num_loader_workers=4, 
         num_eval_loader_workers=2,
         
+        # Learning Rates (Fast)
         lr=2e-4,       
         lr_gen=2e-4,   
         lr_disc=2e-4,  
         lr_scheduler=None, 
     )
 
-    # --- MANUAL AUDIO OVERRIDES ---
+    # --- MANUAL AUDIO OVERRIDES (Critical for Float32 Data) ---
     config.audio.sample_rate = 22050
     config.audio.max_wav_value = 1.0  # Force Float handling
     config.audio.do_trim_silence = True
     config.audio.mel_fmin = 0
     config.audio.mel_fmax = None
+    # ----------------------------------------------------------
 
     # 3. Audio Processor
     ap = AudioProcessor.init_from_config(config)
@@ -159,6 +154,7 @@ def train_fresh_large():
     checkpoint = torch.load(model_path, map_location="cpu")
     model_state = checkpoint["model"]
 
+    # Delete incompatible text embeddings (US -> UK switch)
     bad_keys = []
     for key in model_state.keys():
         if "text_encoder.emb.weight" in key:
@@ -182,8 +178,8 @@ def train_fresh_large():
         eval_samples=eval_samples,
     )
 
-    print("🚀 Starting FIXED V2 Training Run...")
+    print("🚀 Starting FINAL Training Run...")
     trainer.fit()
 
 if __name__ == "__main__":
-    train_fresh_large()
+    train_fresh_final()
