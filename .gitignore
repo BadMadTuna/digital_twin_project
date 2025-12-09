@@ -9,3 +9,7 @@ trainer_0_log.txt
 training_metrics.csv
 
 metadata.csv
+
+plot_metrics.py
+
+training_progress.jpg
