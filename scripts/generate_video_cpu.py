@@ -5,7 +5,7 @@ from TTS.utils.synthesizer import Synthesizer
 
 # --- CONFIGURATION ---
 # Point to your active LARGE dataset run
-MODEL_DIR = "/home/ubuntu/digital_twin_project/models/voice_model_fixed_v2/run-December-09-2025_12+56PM-888d9b4"
+MODEL_DIR = "/home/ubuntu/digital_twin_project/mmodels/voice_model/run-December-09-2025_02+10PM-ddb314d"
 
 # Checkpoint paths
 LIVE_CHECKPOINT = os.path.join(MODEL_DIR, "best_model.pth") 
