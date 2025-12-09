@@ -8,7 +8,8 @@ from TTS.utils.synthesizer import Synthesizer
 MODEL_DIR = "/home/ubuntu/digital_twin_project/models/voice_model/run-December-09-2025_03+49PM-8d1e3b8"
 
 # Checkpoint paths
-LIVE_CHECKPOINT = os.path.join(MODEL_DIR, "best_model.pth") 
+#LIVE_CHECKPOINT = os.path.join(MODEL_DIR, "best_model.pth") 
+LIVE_CHECKPOINT = os.path.join(MODEL_DIR, "checkpoint_10000.pth") 
 LIVE_CONFIG     = os.path.join(MODEL_DIR, "config.json")
 
 # --- STANDARD VITS DEFAULTS ---
