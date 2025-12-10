@@ -44,7 +44,8 @@ def custom_formatter(root_path, manifest_file, **kwargs):
                     "text": text,
                     "audio_file": wav_path,
                     "speaker_name": "my_voice",  # XTTS needs a speaker ID
-                    "language": LANGUAGE
+                    "language": LANGUAGE,
+                    "root_path": root_path
                 })
     return items
 
