@@ -163,11 +163,11 @@ def train_xtts():
     )
 
     # 5. Patch train_step (FINAL ROBUST FIX)
-    # Since Xtts.train_step is misbehaving (signature mismatch), we bypass it.
-    # We directly call model(batch), which triggers the forward pass 
-    # and lets BaseTTS handle the dictionary unpacking.
+    # The Generic Trainer passes (batch, criterion) to this function.
+    # We bypass the broken Xtts.train_step and call model.forward() directly.
+    # CRITICAL: We use **batch to UNPACK the dictionary into named arguments.
     def train_step_wrapper(batch, criterion=None):
-        return model(batch)
+        return model(**batch)
     
     model.train_step = train_step_wrapper
     # -------------------------------------------------------------
