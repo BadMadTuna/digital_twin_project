@@ -77,6 +77,7 @@ def train_xtts():
     # but XTTS config doesn't have it by default.
     config.model_args.use_speaker_embedding = True
     config.model_args.use_d_vector_file = False
+    config.model_args.use_language_embedding = False
     # ---------------------------------------------------------------
 
     # Update the loaded config with your training preferences
@@ -118,26 +119,24 @@ def train_xtts():
         formatter=custom_formatter
     )
 
-    # --- FIX: Patch the model to avoid AttributeErrors ---
+    # --- FIX: Patch the model to avoid AttributeErrors (FINAL VERSION) ---
     
-    # 1. Patch 'get_criterion'
-    def get_criterion():
-        return None
+    # 1. Patch 'get_criterion' and 'get_auxiliary_losses'
+    # The Trainer checks for these during the training loop.
+    def get_criterion(): return None
+    def get_auxiliary_losses(*args, **kwargs): return {} # <--- PROACTIVE FIX
+    
     model.get_criterion = get_criterion
+    model.get_auxiliary_losses = get_auxiliary_losses
 
-    # 2. Patch 'save_ids_to_file' for SpeakerManager
+    # 2. Patch 'save_ids_to_file' for all managers
+    # The Trainer tries to save metadata that XTTS doesn't track this way.
     if hasattr(model, "speaker_manager") and model.speaker_manager:
-        def save_speaker_ids(path):
-            pass # Do nothing
-        model.speaker_manager.save_ids_to_file = save_speaker_ids
-
-    # 3. Patch 'save_ids_to_file' for LanguageManager (NEW FIX)
+        model.speaker_manager.save_ids_to_file = lambda path: None
+        
     if hasattr(model, "language_manager") and model.language_manager:
-        def save_language_ids(path):
-            pass # Do nothing
-        model.language_manager.save_ids_to_file = save_language_ids
-    
-    # -----------------------------------------------------
+        model.language_manager.save_ids_to_file = lambda path: None
+    # ---------------------------------------------------------------------
 
     # 6. Trainer
     trainer = Trainer(
