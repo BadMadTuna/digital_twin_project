@@ -163,11 +163,32 @@ def train_xtts():
     )
 
     # 5. Patch train_step (FINAL ROBUST FIX)
-    # The Generic Trainer passes (batch, criterion) to this function.
-    # We bypass the broken Xtts.train_step and call model.forward() directly.
-    # CRITICAL: We use **batch to UNPACK the dictionary into named arguments.
+    # The Generic Trainer provides a batch with 'text_input' (singular) and 'mel'.
+    # XTTS expects 'text_inputs' (plural) and specific audio inputs.
+    # We rename the keys and act as an adapter between the Trainer and the Model.
     def train_step_wrapper(batch, criterion=None):
-        return model(**batch)
+        # 1. Prepare inputs dictionary for XTTS
+        inputs = {}
+        
+        # 2. Rename 'text_input' -> 'text_inputs'
+        if "text_input" in batch:
+            inputs["text_inputs"] = batch["text_input"]
+            
+        # 3. Pass lengths
+        if "text_lengths" in batch:
+            inputs["text_lengths"] = batch["text_lengths"]
+            
+        # 4. Handle Audio / Targets
+        # Note: If the next error complains about "missing argument: audio_codes",
+        # we will know we need to calculate VQ codes. For now, we try passing 
+        # the basic components to see what the model asks for next.
+        if "mel" in batch:
+             # Some XTTS versions might accept 'mel' or 'spectrogram'
+             # We put it in just in case, but usually it needs 'audio_codes'.
+             inputs["mel_spectrogram"] = batch["mel"]
+        
+        # 5. Call model with CLEANED inputs
+        return model(**inputs)
     
     model.train_step = train_step_wrapper
     # -------------------------------------------------------------
