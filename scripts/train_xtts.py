@@ -111,14 +111,20 @@ def train_xtts():
         formatter=custom_formatter
     )
 
-    # --- FIX: Patch the model to avoid AttributeError ---
-    # The Trainer asks for a loss function ('criterion'), but XTTS calculates 
-    # loss internally. We simply add a dummy method to satisfy the Trainer.
+    # --- FIX: Patch the model to avoid AttributeErrors ---
+    
+    # 1. Patch 'get_criterion' (Trainer expects it, XTTS doesn't have it)
     def get_criterion():
         return None
-
     model.get_criterion = get_criterion
-    # --------------------------------------------------
+
+    # 2. Patch 'save_ids_to_file' (Trainer tries to save speaker IDs, XTTS doesn't use them this way)
+    if hasattr(model, "speaker_manager") and model.speaker_manager:
+        def save_ids_to_file(path):
+            pass # Do nothing
+        model.speaker_manager.save_ids_to_file = save_ids_to_file
+    
+    # -----------------------------------------------------
 
     # 6. Trainer
     trainer = Trainer(
