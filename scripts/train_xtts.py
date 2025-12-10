@@ -76,7 +76,7 @@ def train_xtts():
     # --- FIX: Inject missing attribute for BaseTTS compatibility ---
     # The generic trainer checks this flag to decide how to handle speaker IDs,
     # but XTTS config doesn't have it by default.
-    config.model_args.use_speaker_embedding = True
+    config.model_args.use_speaker_embedding = False
     config.model_args.use_d_vector_file = False
     config.model_args.use_language_embedding = False
     # ---------------------------------------------------------------
