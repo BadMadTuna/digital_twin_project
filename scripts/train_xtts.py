@@ -161,6 +161,14 @@ def train_xtts():
         do_trim_silence=False,
         do_sound_norm=False
     )
+
+    # 5. Patch train_step (NEW FIX)
+    # The Trainer passes 'criterion' to this function, but XTTS doesn't accept it.
+    # We create a wrapper to accept the extra argument and ignore it.
+    original_train_step = model.train_step
+    def train_step_wrapper(batch, criterion):
+        return original_train_step(batch)
+    model.train_step = train_step_wrapper
     # -------------------------------------------------------------
 
     # 6. Trainer
