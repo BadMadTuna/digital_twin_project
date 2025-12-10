@@ -119,24 +119,26 @@ def train_xtts():
         formatter=custom_formatter
     )
 
-    # --- FIX: Patch the model to avoid AttributeErrors (FINAL VERSION) ---
+    # --- FINAL FIX: Complete Patch List for XTTS Compatibility ---
     
-    # 1. Patch 'get_criterion' and 'get_auxiliary_losses'
-    # The Trainer checks for these during the training loop.
+    # 1. Patch Model Methods (Trainer expects these)
     def get_criterion(): return None
-    def get_auxiliary_losses(*args, **kwargs): return {} # <--- PROACTIVE FIX
+    def get_auxiliary_losses(*args, **kwargs): return {}
     
     model.get_criterion = get_criterion
     model.get_auxiliary_losses = get_auxiliary_losses
 
-    # 2. Patch 'save_ids_to_file' for all managers
-    # The Trainer tries to save metadata that XTTS doesn't track this way.
+    # 2. Patch Manager Methods (Trainer tries to save IDs)
     if hasattr(model, "speaker_manager") and model.speaker_manager:
         model.speaker_manager.save_ids_to_file = lambda path: None
-        
     if hasattr(model, "language_manager") and model.language_manager:
         model.language_manager.save_ids_to_file = lambda path: None
-    # ---------------------------------------------------------------------
+
+    # 3. Patch Tokenizer (Dataset loader checks for phoneme flag) <--- NEW FIX
+    if hasattr(model, "tokenizer") and model.tokenizer:
+        model.tokenizer.use_phonemes = False 
+        
+    # -------------------------------------------------------------
 
     # 6. Trainer
     trainer = Trainer(
