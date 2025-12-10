@@ -14,7 +14,7 @@ from TTS.tts.datasets.dataset import TTSDataset
 # === CONFIGURATION ===
 PROJECT_ROOT = os.getcwd()
 DATASET_PATH = os.path.join(PROJECT_ROOT, "audio_data/dataset")
-WAVS_PATH = os.path.join(DATASET_PATH, "wavs") # Ensure we know where wavs are
+WAVS_FOLDER = os.path.join(DATASET_PATH, "wavs") # Explicit wavs folder
 OUTPUT_PATH = os.path.join(PROJECT_ROOT, "models/xtts_finetuned")
 METADATA_FILE = "metadata.csv"
 LANGUAGE = "en"
@@ -70,18 +70,16 @@ def train_xtts():
     print(f"⚙️  Loading Config from: {config_path}")
     config = load_config(config_path)
 
-    # --- FIX 1: Root Config Injection (Fixes 'XttsConfig has no attribute...') ---
+    # --- FIX 1: Root Config Injection ---
     config.use_speaker_embedding = False
     config.use_d_vector_file = False
     config.use_language_embedding = False
     config.r = 1 
     config.return_wav = True
-    
-    # Also patch model_args just in case
     config.model_args.use_speaker_embedding = False
     config.model_args.use_d_vector_file = False
     config.model_args.use_language_embedding = False
-    # -----------------------------------------------------------------------------
+    # ------------------------------------
 
     config.batch_size = 8
     config.eval_batch_size = 2
@@ -123,19 +121,27 @@ def train_xtts():
 
     # --- MONKEY PATCHES ---
     
-    # A. Patch Model Attributes
+    # A. Patch Dataset (Ensure paths exist)
+    original_load_data = TTSDataset.load_data
+    def patched_load_data(self, idx):
+        data = original_load_data(self, idx)
+        data["audio_file"] = self.samples[idx]["audio_file"]
+        return data
+    TTSDataset.load_data = patched_load_data
+
+    # B. Patch Attributes
     def get_criterion(): return None
     def get_auxiliary_losses(*args, **kwargs): return {}
     model.get_criterion = get_criterion
     model.get_auxiliary_losses = get_auxiliary_losses
 
-    # B. Patch Managers
+    # C. Patch Managers
     if hasattr(model, "speaker_manager") and model.speaker_manager:
         model.speaker_manager.save_ids_to_file = lambda path: None
     if hasattr(model, "language_manager") and model.language_manager:
         model.language_manager.save_ids_to_file = lambda path: None
 
-    # C. Patch Tokenizer
+    # D. Patch Tokenizer
     if hasattr(model, "tokenizer") and model.tokenizer:
         model.tokenizer.use_phonemes = False
         def tokenizer_print_logs(level=0): pass
@@ -144,7 +150,7 @@ def train_xtts():
             return model.tokenizer.encode(text, lang=LANGUAGE)
         model.tokenizer.text_to_ids = text_to_ids
 
-    # D. Patch AudioProcessor
+    # E. Patch AudioProcessor
     model.ap = AudioProcessor(
         sample_rate=22050,
         n_fft=1024,
@@ -155,60 +161,55 @@ def train_xtts():
         do_sound_norm=False
     )
 
-    # E. DISABLE TEST RUN (Fixes the final crash)
-    # The generic test_run tries to synthesize audio using old methods. We don't need it.
+    # F. Disable Test Run
     def test_run_patch(self, assets):
-        print("ℹ️  Skipping default test_run (incompatible with XTTS)")
+        print("ℹ️  Skipping test_run")
         return {}
     model.test_run = test_run_patch.__get__(model, Xtts)
 
-    # F. Patch train_step (NUCLEAR AUDIO FIX)
+    # G. Patch train_step (CORRECTED AUDIO LOADING)
     def train_step_wrapper(batch, criterion=None):
-        # 1. Prepare Text
         text_inputs = batch.get("text_input")
         text_lengths = batch.get("text_lengths")
         
-        # 2. Prepare Audio (Nuclear Option)
         wav = None
-        
-        # Check if loader actually gave us data
         if "waveform" in batch and batch["waveform"] is not None:
              wav = batch["waveform"]
         
-        # If not, RECONSTRUCT path from 'audio_unique_names'
-        # Your error logs showed 'audio_unique_names' is present!
+        # --- FIXED FALLBACK LOGIC ---
         if wav is None and "audio_unique_names" in batch:
              wavs = []
              for name in batch["audio_unique_names"]:
-                 # Try typical locations
-                 path1 = os.path.join(DATASET_PATH, name + ".wav")
-                 path2 = os.path.join(DATASET_PATH, "wavs", name + ".wav")
-                 path3 = os.path.join(DATASET_PATH, name) # In case extension is in name
+                 # 1. Sanitize the name (remove #wavs/ prefix)
+                 # Example: "#wavs/segment_0102" -> "segment_0102"
+                 clean_name = name.split("#")[-1] 
+                 clean_name = os.path.basename(clean_name)
                  
-                 final_path = None
-                 if os.path.exists(path1): final_path = path1
-                 elif os.path.exists(path2): final_path = path2
-                 elif os.path.exists(path3): final_path = path3
+                 # 2. Construct absolute path to known wavs folder
+                 # We force it to look in "audio_data/dataset/wavs"
+                 file_path = os.path.join(WAVS_FOLDER, clean_name)
+                 if not file_path.endswith(".wav"):
+                     file_path += ".wav"
                  
-                 if final_path:
-                     w = model.ap.load_wav(final_path)
+                 if os.path.exists(file_path):
+                     w = model.ap.load_wav(file_path)
                      w = torch.tensor(w).float().to(model.device)
                      wavs.append(w)
                  else:
-                     print(f"⚠️ Could not find audio file for: {name}")
+                     print(f"⚠️ Could not find audio file: {file_path}")
 
              if len(wavs) > 0:
                  max_len = max([w.shape[0] for w in wavs])
                  wav = torch.zeros(len(wavs), 1, max_len, device=model.device)
                  for i, w in enumerate(wavs):
                      wav[i, 0, :w.shape[0]] = w
-        
-        # FAILSAFE
+        # ----------------------------
+
         if wav is None:
-            print(f"\n❌ Error: Audio completely missing. Names found: {batch.get('audio_unique_names')}")
+            print(f"❌ Error: Audio missing. Names: {batch.get('audio_unique_names')}")
             return None, {} 
 
-        # 3. Compute Conditioning & Codes
+        # Compute Codes
         audio_codes = None
         wav_lengths = None
         cond_mels = None
@@ -216,8 +217,6 @@ def train_xtts():
         if wav is not None:
             if wav.dim() == 2: wav = wav.unsqueeze(1)
             ref_wav = wav.to(model.device)
-            
-            # Use raw sample length
             wav_lengths = torch.tensor([ref_wav.shape[2]] * ref_wav.shape[0], device=model.device)
             
             with torch.no_grad():
@@ -225,7 +224,6 @@ def train_xtts():
                 cond_mels = model.cond_stage_model(ref_wav, mask=mask)
                 audio_codes = model.dvae.get_codebook_indices(ref_wav)
 
-        # 4. Call GPT Directly
         outputs = model.gpt(
             text_inputs=text_inputs,
             text_lengths=text_lengths,
@@ -238,7 +236,6 @@ def train_xtts():
         loss_dict = {"loss": outputs["loss"]}
         return outputs, loss_dict
 
-    # G. Patch eval_step
     def eval_step_wrapper(batch, criterion=None):
         return train_step_wrapper(batch, criterion)
 
@@ -246,7 +243,6 @@ def train_xtts():
     model.eval_step = eval_step_wrapper
     # --------------------------------
 
-    # 6. Trainer
     trainer = Trainer(
         TrainerArgs(),
         config,
