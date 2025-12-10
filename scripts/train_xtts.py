@@ -7,6 +7,7 @@ from TTS.tts.datasets import load_tts_samples
 from TTS.tts.models.xtts import Xtts
 from TTS.utils.manage import ModelManager
 from TTS.config import load_config  # <--- NEW IMPORT
+from TTS.utils.audio import AudioProcessor
 
 # === CONFIGURATION ===
 PROJECT_ROOT = os.getcwd()
@@ -134,14 +135,16 @@ def train_xtts():
     if hasattr(model, "language_manager") and model.language_manager:
         model.language_manager.save_ids_to_file = lambda path: None
 
-    # 3. Patch Tokenizer (The fix for your current error)
+    # 3. Patch Tokenizer
     if hasattr(model, "tokenizer") and model.tokenizer:
-        model.tokenizer.use_phonemes = False  # Previous fix
-        
-        # NEW FIX: Add dummy print_logs method
-        def tokenizer_print_logs(level=0):
-            pass
+        model.tokenizer.use_phonemes = False
+        def tokenizer_print_logs(level=0): pass
         model.tokenizer.print_logs = tokenizer_print_logs
+
+    # 4. Patch AudioProcessor (NEW FIX)
+    # The Dataset loader needs an 'ap' to load WAV files, but XTTS doesn't create one.
+    # We create a minimal one here with the correct sample rate (22050Hz for XTTS v2).
+    model.ap = AudioProcessor(sample_rate=22050)
         
     # -------------------------------------------------------------
 
