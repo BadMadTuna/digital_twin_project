@@ -1,12 +1,13 @@
 import os
 import torch
+import inspect
 from trainer import Trainer, TrainerArgs
 from TTS.tts.configs.shared_configs import BaseDatasetConfig
 from TTS.tts.configs.xtts_config import XttsConfig, XttsArgs
 from TTS.tts.datasets import load_tts_samples
 from TTS.tts.models.xtts import Xtts
 from TTS.utils.manage import ModelManager
-from TTS.config import load_config  # <--- NEW IMPORT
+from TTS.config import load_config
 from TTS.utils.audio import AudioProcessor
 
 # === CONFIGURATION ===
@@ -44,7 +45,7 @@ def custom_formatter(root_path, manifest_file, **kwargs):
                 items.append({
                     "text": text,
                     "audio_file": wav_path,
-                    "speaker_name": "my_voice",  # XTTS needs a speaker ID
+                    "speaker_name": "my_voice",
                     "language": LANGUAGE,
                     "root_path": root_path
                 })
@@ -59,29 +60,26 @@ def train_xtts():
         language=LANGUAGE
     )
 
-    # 2. DEFINE PATHS (Model already downloaded)
-    # Using the path confirmed by your logs:
+    # 2. DEFINE PATHS
     checkpoint_dir = os.path.expanduser("~/.local/share/tts/tts_models--multilingual--multi-dataset--xtts_v2")
-    
     model_path = os.path.join(checkpoint_dir, "model.pth")
     config_path = os.path.join(checkpoint_dir, "config.json")
     vocab_path = os.path.join(checkpoint_dir, "vocab.json")
     speaker_path = os.path.join(checkpoint_dir, "speakers_xtts.pth")
 
     # 3. LOAD & UPDATE CONFIG
-    # We load the existing config to match the model architecture exactly
     print(f"⚙️  Loading Config from: {config_path}")
     config = load_config(config_path)
 
-    # --- FIX: Inject missing attribute for BaseTTS compatibility ---
-    # The generic trainer checks this flag to decide how to handle speaker IDs,
-    # but XTTS config doesn't have it by default.
+    # --- FIX: Inject attributes for Generic Trainer compatibility ---
     config.model_args.use_speaker_embedding = False
     config.model_args.use_d_vector_file = False
     config.model_args.use_language_embedding = False
-
-    config.r = 1
-    # ---------------------------------------------------------------
+    config.r = 1 # Legacy reduction factor (not used by XTTS, set to 1)
+    
+    # NEW: Force loader to return raw audio so we can compute codes
+    config.return_wav = True  
+    # ----------------------------------------------------------------
 
     # Update the loaded config with your training preferences
     config.batch_size = 8
@@ -97,7 +95,7 @@ def train_xtts():
     config.print_eval = True
     config.save_step = 500
     config.output_path = OUTPUT_PATH
-    config.datasets = [dataset_config]  # Important: Attach your dataset here
+    config.datasets = [dataset_config]
 
     # 4. Load Model
     print("⬇️  Loading XTTS v2 Base...")
@@ -110,7 +108,7 @@ def train_xtts():
         vocab_path=vocab_path, 
         speaker_file_path=speaker_path,
         eval=True,
-        strict=False  # <--- CRITICAL: Prevents crash on minor metadata mismatches
+        strict=False
     )
 
     # 5. Load Data
@@ -122,36 +120,32 @@ def train_xtts():
         formatter=custom_formatter
     )
 
-    # --- FINAL FIX: Complete Patch List for XTTS Compatibility ---
+    # --- FINAL MONKEY PATCH BLOCK ---
     
-    # 1. Patch Model Methods
+    # A. Patch Model Methods (Trainer expects these)
     def get_criterion(): return None
     def get_auxiliary_losses(*args, **kwargs): return {}
-    
     model.get_criterion = get_criterion
     model.get_auxiliary_losses = get_auxiliary_losses
 
-    # 2. Patch Manager Methods
+    # B. Patch Managers (Trainer tries to save IDs)
     if hasattr(model, "speaker_manager") and model.speaker_manager:
         model.speaker_manager.save_ids_to_file = lambda path: None
     if hasattr(model, "language_manager") and model.language_manager:
         model.language_manager.save_ids_to_file = lambda path: None
 
-    # 3. Patch Tokenizer (UPDATED)
+    # C. Patch Tokenizer (Trainer expects specific methods)
     if hasattr(model, "tokenizer") and model.tokenizer:
         model.tokenizer.use_phonemes = False
-        
-        # Patch print_logs
         def tokenizer_print_logs(level=0): pass
         model.tokenizer.print_logs = tokenizer_print_logs
         
-        # Patch text_to_ids (The wrapper you need now)
-        # The generic loader calls text_to_ids(text), but XTTS needs encode(text, lang)
+        # Generic loader calls text_to_ids, XTTS needs encode
         def text_to_ids(text):
             return model.tokenizer.encode(text, lang=LANGUAGE)
         model.tokenizer.text_to_ids = text_to_ids
 
-    # 4. Patch AudioProcessor
+    # D. Patch AudioProcessor (Loader needs this to read WAVs)
     model.ap = AudioProcessor(
         sample_rate=22050,
         n_fft=1024,
@@ -162,36 +156,54 @@ def train_xtts():
         do_sound_norm=False
     )
 
-    # 5. Patch train_step (FINAL ROBUST FIX)
-    # The Generic Trainer provides a batch with 'text_input' (singular) and 'mel'.
-    # XTTS expects 'text_inputs' (plural) and specific audio inputs.
-    # We rename the keys and act as an adapter between the Trainer and the Model.
+    # E. Patch train_step (THE CRITICAL ADAPTER)
+    # This wrapper adapts the Generic Trainer batch (text_input, waveform) 
+    # to the XTTS Model signature (token_ids, audio_codes, cond_mels).
     def train_step_wrapper(batch, criterion=None):
-        # 1. Prepare inputs dictionary for XTTS
         inputs = {}
-        
-        # 2. Rename 'text_input' -> 'text_inputs'
+
+        # 1. Map Text
+        # XTTS v2 usually wants 'token_ids' for the text indices
         if "text_input" in batch:
-            inputs["text_inputs"] = batch["text_input"]
-            
-        # 3. Pass lengths
+            inputs["token_ids"] = batch["text_input"]
+        
         if "text_lengths" in batch:
             inputs["text_lengths"] = batch["text_lengths"]
             
-        # 4. Handle Audio / Targets
-        # Note: If the next error complains about "missing argument: audio_codes",
-        # we will know we need to calculate VQ codes. For now, we try passing 
-        # the basic components to see what the model asks for next.
-        if "mel" in batch:
-             # Some XTTS versions might accept 'mel' or 'spectrogram'
-             # We put it in just in case, but usually it needs 'audio_codes'.
-             inputs["mel_spectrogram"] = batch["mel"]
-        
-        # 5. Call model with CLEANED inputs
+        # 2. Compute Audio Codes & Conditioning (On the fly)
+        # The loader gives us raw audio ("waveform"). We must run it through 
+        # the model's DVAE and Conditioning encoder to get the inputs XTTS needs.
+        wav_key = "audio" if "audio" in batch else "waveform"
+        if wav_key in batch:
+            wav = batch[wav_key]
+            # Ensure (Batch, 1, Time) format
+            if wav.dim() == 2: 
+                wav = wav.unsqueeze(1)
+            
+            # Move to GPU for calculation
+            ref_wav = wav.to(model.device)
+            
+            with torch.no_grad():
+                # A. Calculate Speaker Conditioning (Mel Spectrograms)
+                # Note: condition_on_audio calls the Hifigan/DVAE internally or cond_stage_model
+                # We use the internal 'cond_stage_model' to get the latents
+                mask = torch.ones(ref_wav.shape[0], 1, device=ref_wav.device)
+                cond_mels = model.cond_stage_model(ref_wav, mask=mask)
+                
+                # B. Calculate Discrete Audio Codes (The target for the model)
+                # XTTS uses a VQ-VAE (DVAE) to turn audio into code indices
+                audio_codes = model.dvae.get_codebook_indices(ref_wav)
+
+            # 3. Add Calculated Inputs
+            inputs["audio_codes"] = audio_codes
+            inputs["cond_mels"] = cond_mels
+            inputs["cond_refs"] = cond_mels 
+
+        # 4. Call Model
         return model(**inputs)
     
     model.train_step = train_step_wrapper
-    # -------------------------------------------------------------
+    # --------------------------------
 
     # 6. Trainer
     trainer = Trainer(
