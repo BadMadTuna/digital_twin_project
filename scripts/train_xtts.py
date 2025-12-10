@@ -163,14 +163,12 @@ def train_xtts():
     )
 
     # 5. Patch train_step (FINAL ROBUST FIX)
-    # The Generic Trainer passes (batch, criterion) to this function.
-    # XTTS.train_step only wants (batch).
-    # We fix the "Takes 1 but 2 given" error by calling the Class method directly.
+    # Since Xtts.train_step is misbehaving (signature mismatch), we bypass it.
+    # We directly call model(batch), which triggers the forward pass 
+    # and lets BaseTTS handle the dictionary unpacking.
     def train_step_wrapper(batch, criterion=None):
-        return Xtts.train_step(model, batch)
+        return model(batch)
     
-    # We assign it as a plain function so the Trainer simply calls it 
-    # as model.train_step(batch, criterion)
     model.train_step = train_step_wrapper
     # -------------------------------------------------------------
 
