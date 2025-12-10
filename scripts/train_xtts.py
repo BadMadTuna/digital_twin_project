@@ -135,14 +135,21 @@ def train_xtts():
     if hasattr(model, "language_manager") and model.language_manager:
         model.language_manager.save_ids_to_file = lambda path: None
 
-    # 3. Patch Tokenizer
+    # 3. Patch Tokenizer (UPDATED)
     if hasattr(model, "tokenizer") and model.tokenizer:
         model.tokenizer.use_phonemes = False
+        
+        # Patch print_logs
         def tokenizer_print_logs(level=0): pass
         model.tokenizer.print_logs = tokenizer_print_logs
+        
+        # Patch text_to_ids (The wrapper you need now)
+        # The generic loader calls text_to_ids(text), but XTTS needs encode(text, lang)
+        def text_to_ids(text):
+            return model.tokenizer.encode(text, lang=LANGUAGE)
+        model.tokenizer.text_to_ids = text_to_ids
 
-    # 4. Patch AudioProcessor (UPDATED FIX)
-    # We provide specific FFT parameters so it doesn't try (and fail) to calculate them.
+    # 4. Patch AudioProcessor
     model.ap = AudioProcessor(
         sample_rate=22050,
         n_fft=1024,
@@ -152,7 +159,6 @@ def train_xtts():
         do_trim_silence=False,
         do_sound_norm=False
     )
-        
     # -------------------------------------------------------------
 
     # 6. Trainer
