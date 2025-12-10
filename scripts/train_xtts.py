@@ -14,7 +14,7 @@ from TTS.tts.datasets.dataset import TTSDataset
 # === CONFIGURATION ===
 PROJECT_ROOT = os.getcwd()
 DATASET_PATH = os.path.join(PROJECT_ROOT, "audio_data/dataset")
-WAVS_FOLDER = os.path.join(DATASET_PATH, "wavs") # Explicit wavs folder
+WAVS_FOLDER = os.path.join(DATASET_PATH, "wavs") # Pointing to audio_data/dataset/wavs
 OUTPUT_PATH = os.path.join(PROJECT_ROOT, "models/xtts_finetuned")
 METADATA_FILE = "metadata.csv"
 LANGUAGE = "en"
@@ -167,26 +167,24 @@ def train_xtts():
         return {}
     model.test_run = test_run_patch.__get__(model, Xtts)
 
-    # G. Patch train_step (CORRECTED AUDIO LOADING)
+    # G. Patch train_step (CORRECTED MODULE ACCESS)
     def train_step_wrapper(batch, criterion=None):
         text_inputs = batch.get("text_input")
         text_lengths = batch.get("text_lengths")
         
+        # --- 1. Audio Loading ---
         wav = None
         if "waveform" in batch and batch["waveform"] is not None:
              wav = batch["waveform"]
         
-        # --- FIXED FALLBACK LOGIC ---
         if wav is None and "audio_unique_names" in batch:
              wavs = []
              for name in batch["audio_unique_names"]:
-                 # 1. Sanitize the name (remove #wavs/ prefix)
-                 # Example: "#wavs/segment_0102" -> "segment_0102"
+                 # Cleanup: "#wavs/segment_0102" -> "segment_0102"
                  clean_name = name.split("#")[-1] 
                  clean_name = os.path.basename(clean_name)
                  
-                 # 2. Construct absolute path to known wavs folder
-                 # We force it to look in "audio_data/dataset/wavs"
+                 # Look in known folder
                  file_path = os.path.join(WAVS_FOLDER, clean_name)
                  if not file_path.endswith(".wav"):
                      file_path += ".wav"
@@ -196,20 +194,20 @@ def train_xtts():
                      w = torch.tensor(w).float().to(model.device)
                      wavs.append(w)
                  else:
-                     print(f"⚠️ Could not find audio file: {file_path}")
+                     # Silent fail to avoid log spam, handled by None check
+                     pass
 
              if len(wavs) > 0:
                  max_len = max([w.shape[0] for w in wavs])
                  wav = torch.zeros(len(wavs), 1, max_len, device=model.device)
                  for i, w in enumerate(wavs):
                      wav[i, 0, :w.shape[0]] = w
-        # ----------------------------
 
         if wav is None:
-            print(f"❌ Error: Audio missing. Names: {batch.get('audio_unique_names')}")
+            print(f"❌ Error: Audio missing. Batch keys: {list(batch.keys())}")
             return None, {} 
 
-        # Compute Codes
+        # --- 2. Conditioning & Codes ---
         audio_codes = None
         wav_lengths = None
         cond_mels = None
@@ -221,9 +219,24 @@ def train_xtts():
             
             with torch.no_grad():
                 mask = torch.ones(ref_wav.shape[0], 1, device=ref_wav.device)
-                cond_mels = model.cond_stage_model(ref_wav, mask=mask)
-                audio_codes = model.dvae.get_codebook_indices(ref_wav)
+                
+                # --- FIX: Find Cond Model & DVAE Dynamically ---
+                cond_model = getattr(model, "cond_stage_model", None)
+                if not cond_model and hasattr(model, "gpt"):
+                     cond_model = getattr(model.gpt, "cond_stage_model", None)
+                
+                dvae = getattr(model, "dvae", None)
+                if not dvae and hasattr(model, "hifigan_decoder"):
+                     dvae = model.hifigan_decoder
+                
+                if cond_model is None or dvae is None:
+                     raise AttributeError("Could not find cond_stage_model or dvae/hifigan_decoder on model!")
+                # -----------------------------------------------
 
+                cond_mels = cond_model(ref_wav, mask=mask)
+                audio_codes = dvae.get_codebook_indices(ref_wav)
+
+        # --- 3. Call GPT ---
         outputs = model.gpt(
             text_inputs=text_inputs,
             text_lengths=text_lengths,
