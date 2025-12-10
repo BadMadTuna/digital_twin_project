@@ -6,6 +6,7 @@ from TTS.tts.configs.xtts_config import XttsConfig, XttsArgs
 from TTS.tts.datasets import load_tts_samples
 from TTS.tts.models.xtts import Xtts
 from TTS.utils.manage import ModelManager
+from TTS.config import load_config  # <--- NEW IMPORT
 
 # === CONFIGURATION ===
 PROJECT_ROOT = os.getcwd()
@@ -56,54 +57,51 @@ def train_xtts():
         language=LANGUAGE
     )
 
-    # 2. XTTS Configuration
-    config = XttsConfig(
-        batch_size=8,   # XTTS is heavy, keep batch size low (4-8)
-        eval_batch_size=2,
-        num_loader_workers=2,
-        num_eval_loader_workers=1,
-        run_eval=True,
-        test_delay_epochs=-1,
-        epochs=15,      # <--- XTTS converges VERY fast. 15 is usually enough.
-        text_cleaner="whitespace_cleaner",
-        use_phonemes=False, # XTTS uses GPT-2 BPE, not phonemes
-        #language=LANGUAGE,
-        print_step=50,
-        print_eval=True,
-        save_step=500,
-        output_path=OUTPUT_PATH,
-        datasets=[dataset_config],
-    )
-
-    # 3. Load Model
-    print("⬇️  Loading XTTS v2 Base...")
-    model = Xtts.init_from_config(config)
-    
-    # FIX: Manually define paths since manager.download_model is returning None
-    # Based on your logs, the model is located here:
+    # 2. DEFINE PATHS (Model already downloaded)
+    # Using the path confirmed by your logs:
     checkpoint_dir = os.path.expanduser("~/.local/share/tts/tts_models--multilingual--multi-dataset--xtts_v2")
     
     model_path = os.path.join(checkpoint_dir, "model.pth")
+    config_path = os.path.join(checkpoint_dir, "config.json")
     vocab_path = os.path.join(checkpoint_dir, "vocab.json")
     speaker_path = os.path.join(checkpoint_dir, "speakers_xtts.pth")
 
-    # Check if files exist to avoid vague errors
-    if not os.path.exists(model_path):
-        print(f"❌ Error: Model not found at {model_path}")
-        return
+    # 3. LOAD & UPDATE CONFIG
+    # We load the existing config to match the model architecture exactly
+    print(f"⚙️  Loading Config from: {config_path}")
+    config = load_config(config_path)
 
-    print(f"📂 Loading Checkpoint from: {checkpoint_dir}")
+    # Update the loaded config with your training preferences
+    config.batch_size = 8
+    config.eval_batch_size = 2
+    config.num_loader_workers = 2
+    config.num_eval_loader_workers = 1
+    config.run_eval = True
+    config.test_delay_epochs = -1
+    config.epochs = 15
+    config.text_cleaner = "whitespace_cleaner"
+    config.use_phonemes = False
+    config.print_step = 50
+    config.print_eval = True
+    config.save_step = 500
+    config.output_path = OUTPUT_PATH
+    config.datasets = [dataset_config]  # Important: Attach your dataset here
+
+    # 4. Load Model
+    print("⬇️  Loading XTTS v2 Base...")
+    model = Xtts.init_from_config(config)
     
-    # Load with explicit paths
+    print(f"📂 Loading Checkpoint from: {checkpoint_dir}")
     model.load_checkpoint(
         config, 
         checkpoint_path=model_path, 
         vocab_path=vocab_path, 
-        speaker_file_path=speaker_path,  # Explicitly pass this to prevent the crash
-        eval=True
+        speaker_file_path=speaker_path,
+        eval=True,
+        strict=False  # <--- CRITICAL: Prevents crash on minor metadata mismatches
     )
 
-    # 4. Load Data
+    # 5. Load Data
     print("📂 Loading Data...")
     train_samples, eval_samples = load_tts_samples(
         dataset_config,
@@ -112,7 +110,7 @@ def train_xtts():
         formatter=custom_formatter
     )
 
-    # 5. Trainer
+    # 6. Trainer
     trainer = Trainer(
         TrainerArgs(),
         config,
