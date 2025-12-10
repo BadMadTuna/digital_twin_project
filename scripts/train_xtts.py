@@ -75,10 +75,8 @@ def train_xtts():
     config.model_args.use_speaker_embedding = False
     config.model_args.use_d_vector_file = False
     config.model_args.use_language_embedding = False
-    config.r = 1 # Legacy reduction factor (not used by XTTS, set to 1)
-    
-    # NEW: Force loader to return raw audio so we can compute codes
-    config.return_wav = True  
+    config.r = 1 
+    config.return_wav = True  # Force loader to return raw audio 
     # ----------------------------------------------------------------
 
     # Update the loaded config with your training preferences
@@ -122,30 +120,29 @@ def train_xtts():
 
     # --- FINAL MONKEY PATCH BLOCK ---
     
-    # A. Patch Model Methods (Trainer expects these)
+    # A. Patch Model Methods
     def get_criterion(): return None
     def get_auxiliary_losses(*args, **kwargs): return {}
     model.get_criterion = get_criterion
     model.get_auxiliary_losses = get_auxiliary_losses
 
-    # B. Patch Managers (Trainer tries to save IDs)
+    # B. Patch Managers
     if hasattr(model, "speaker_manager") and model.speaker_manager:
         model.speaker_manager.save_ids_to_file = lambda path: None
     if hasattr(model, "language_manager") and model.language_manager:
         model.language_manager.save_ids_to_file = lambda path: None
 
-    # C. Patch Tokenizer (Trainer expects specific methods)
+    # C. Patch Tokenizer
     if hasattr(model, "tokenizer") and model.tokenizer:
         model.tokenizer.use_phonemes = False
         def tokenizer_print_logs(level=0): pass
         model.tokenizer.print_logs = tokenizer_print_logs
         
-        # Generic loader calls text_to_ids, XTTS needs encode
         def text_to_ids(text):
             return model.tokenizer.encode(text, lang=LANGUAGE)
         model.tokenizer.text_to_ids = text_to_ids
 
-    # D. Patch AudioProcessor (Loader needs this to read WAVs)
+    # D. Patch AudioProcessor (Required for file loading)
     model.ap = AudioProcessor(
         sample_rate=22050,
         n_fft=1024,
@@ -156,19 +153,15 @@ def train_xtts():
         do_sound_norm=False
     )
 
-    # 5. Patch train_step (FINAL "DIRECT GPT" BYPASS)
-    # Since Xtts.forward is rejecting standard arguments, we bypass it and 
-    # call the underlying 'model.gpt' directly. This is the core engine 
-    # and has a reliable signature.
+    # E. Patch train_step (DIRECT GPT BYPASS)
     def train_step_wrapper(batch, criterion=None):
-        # --- 1. Prepare Text Inputs ---
-        # Generic loader gives 'text_input', XTTS GPT needs 'text_inputs'
+        # 1. Prepare Text
         text_inputs = batch.get("text_input")
         text_lengths = batch.get("text_lengths")
         
-        # --- 2. Prepare Audio Inputs (Fallback Logic) ---
+        # 2. Prepare Audio (Robust Fallback)
         wav = None
-        # Try finding existing tensor
+        # Try tensor keys first
         for k in ["audio", "waveform"]:
              if k in batch and batch[k] is not None:
                  wav = batch[k]
@@ -178,18 +171,25 @@ def train_xtts():
         if wav is None and "audio_file" in batch:
              wavs = []
              for path in batch["audio_file"]:
-                 # Load raw audio
                  w = model.ap.load_wav(path)
                  w = torch.tensor(w).float().to(model.device)
                  wavs.append(w)
              
-             # Pad
+             # Pad batch
              max_len = max([w.shape[0] for w in wavs])
              wav = torch.zeros(len(wavs), 1, max_len, device=model.device)
              for i, w in enumerate(wavs):
                  wav[i, 0, :w.shape[0]] = w
-                 
-        # --- 3. Compute Conditioning & Codes ---
+        
+        # FAILSAFE: If audio is still missing, print debug info
+        if wav is None:
+            print(f"\n❌ Error: Batch missing audio. Keys found: {list(batch.keys())}")
+            # Try to grab auxiliary keys if they exist, or fail hard
+            if "mel" in batch:
+                print("⚠️ Found 'mel' but need raw 'audio' for XTTS fine-tuning.")
+            return None, {} # Should cause a visible crash rather than a silent one
+
+        # 3. Compute Conditioning & Codes
         audio_codes = None
         wav_lengths = None
         cond_mels = None
@@ -198,20 +198,17 @@ def train_xtts():
             if wav.dim() == 2: wav = wav.unsqueeze(1)
             ref_wav = wav.to(model.device)
             
+            # Use raw sample length for wav_lengths (Crucial for XTTS!)
+            # Shape is (Batch, 1, Time) -> Time is at index 2
+            wav_lengths = torch.tensor([ref_wav.shape[2]] * ref_wav.shape[0], device=model.device)
+            
             with torch.no_grad():
-                # Conditioning Latents
                 mask = torch.ones(ref_wav.shape[0], 1, device=ref_wav.device)
                 cond_mels = model.cond_stage_model(ref_wav, mask=mask)
-                
-                # Discrete Audio Codes (Target)
                 audio_codes = model.dvae.get_codebook_indices(ref_wav)
-                
-            # Lengths
-            wav_lengths = torch.tensor([audio_codes.shape[1]] * audio_codes.shape[0], device=model.device)
 
-        # --- 4. CALL GPT DIRECTLY ---
-        # We bypass model.forward and hit the Transformer directly.
-        # This returns the loss automatically.
+        # 4. Call GPT Directly
+        # We pass arguments by name to the internal GPT engine
         outputs = model.gpt(
             text_inputs=text_inputs,
             text_lengths=text_lengths,
@@ -221,10 +218,7 @@ def train_xtts():
             return_attentions=False
         )
         
-        # --- 5. FORMAT FOR TRAINER ---
-        # The Trainer expects (outputs, loss_dict)
         loss_dict = {"loss": outputs["loss"]}
-        
         return outputs, loss_dict
 
     model.train_step = train_step_wrapper
