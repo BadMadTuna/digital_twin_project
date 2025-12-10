@@ -79,6 +79,8 @@ def train_xtts():
     config.model_args.use_speaker_embedding = False
     config.model_args.use_d_vector_file = False
     config.model_args.use_language_embedding = False
+
+    config.r = 1
     # ---------------------------------------------------------------
 
     # Update the loaded config with your training preferences
