@@ -111,6 +111,15 @@ def train_xtts():
         formatter=custom_formatter
     )
 
+    # --- FIX: Patch the model to avoid AttributeError ---
+    # The Trainer asks for a loss function ('criterion'), but XTTS calculates 
+    # loss internally. We simply add a dummy method to satisfy the Trainer.
+    def get_criterion():
+        return None
+
+    model.get_criterion = get_criterion
+    # --------------------------------------------------
+
     # 6. Trainer
     trainer = Trainer(
         TrainerArgs(),
