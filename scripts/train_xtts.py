@@ -156,63 +156,75 @@ def train_xtts():
         do_sound_norm=False
     )
 
-    # 5. Patch train_step (FINAL ROBUST ADAPTER)
+    # 5. Patch train_step (FINAL DEBUG ADAPTER)
     def train_step_wrapper(batch, criterion=None):
         inputs = {}
 
-        # 1. Map Text (Try 'token_ids' or 'text_input')
-        if "text_input" in batch:
-            inputs["token_ids"] = batch["text_input"]
+        # --- A. DEBUG: PRINT SIGNATURE ONCE ---
+        # This will print the EXACT arguments your model expects to the console.
+        if not hasattr(train_step_wrapper, "signature_checked"):
+            import inspect
+            sig = inspect.signature(model.forward)
+            print("\n🔍 DEBUG: Model Forward Arguments:", list(sig.parameters.keys()))
+            train_step_wrapper.signature_checked = True
+
+        # --- B. MAP TEXT ---
+        # We try mapping the text input to all likely names until one sticks.
+        # This prevents the "unexpected keyword" error.
+        text_data = batch.get("text_input")
+        if text_data is not None:
+            # Common names for XTTS text inputs
+            possible_names = ["text_inputs", "token_ids", "input_ids"]
+            
+            # Find which one exists in the model signature
+            import inspect
+            sig_params = inspect.signature(model.forward).parameters
+            
+            found_name = None
+            for name in possible_names:
+                if name in sig_params:
+                    inputs[name] = text_data
+                    found_name = name
+                    break
+            
+            # Fallback if we couldn't match any name automatically
+            if not found_name:
+                inputs["text_inputs"] = text_data # Default fallback
+
         if "text_lengths" in batch:
             inputs["text_lengths"] = batch["text_lengths"]
             
-        # 2. Handle Audio (Robust Fallback Logic)
+        # --- C. HANDLE AUDIO (Fallback Logic) ---
         wav = None
-        
-        # A. Try fetching existing tensor from batch
         for k in ["audio", "waveform"]:
              if k in batch and batch[k] is not None:
                  wav = batch[k]
                  break
         
-        # B. Fallback: Load from disk if tensor is missing/None
-        # (This fixes the 'NoneType' error you are seeing)
         if wav is None and "audio_file" in batch:
              wavs = []
              for path in batch["audio_file"]:
-                 # Load raw audio using the patched processor
                  w = model.ap.load_wav(path)
                  w = torch.tensor(w).float().to(model.device)
                  wavs.append(w)
-             
-             # Pad and Stack to create (Batch, 1, Time)
              max_len = max([w.shape[0] for w in wavs])
              wav = torch.zeros(len(wavs), 1, max_len, device=model.device)
              for i, w in enumerate(wavs):
                  wav[i, 0, :w.shape[0]] = w
 
-        # 3. Compute Codes & Conditioning
         if wav is not None:
-            # Ensure correct dimensions (Batch, 1, Time)
-            if wav.dim() == 2: 
-                wav = wav.unsqueeze(1)
-            
+            if wav.dim() == 2: wav = wav.unsqueeze(1)
             ref_wav = wav.to(model.device)
-            
             with torch.no_grad():
-                # A. Conditioning Latents
                 mask = torch.ones(ref_wav.shape[0], 1, device=ref_wav.device)
                 cond_mels = model.cond_stage_model(ref_wav, mask=mask)
-                
-                # B. Discrete Audio Codes
-                # XTTS v2 uses the DVAE to get codebook indices
                 audio_codes = model.dvae.get_codebook_indices(ref_wav)
                 
             inputs["audio_codes"] = audio_codes
             inputs["cond_mels"] = cond_mels
-            inputs["cond_refs"] = cond_mels
+            inputs["cond_refs"] = cond_mels 
 
-        # 4. Call Model
+        # --- D. CALL MODEL ---
         return model(**inputs)
     
     model.train_step = train_step_wrapper
