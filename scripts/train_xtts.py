@@ -141,10 +141,16 @@ def train_xtts():
         def tokenizer_print_logs(level=0): pass
         model.tokenizer.print_logs = tokenizer_print_logs
 
-    # 4. Patch AudioProcessor (NEW FIX)
-    # The Dataset loader needs an 'ap' to load WAV files, but XTTS doesn't create one.
-    # We create a minimal one here with the correct sample rate (22050Hz for XTTS v2).
-    model.ap = AudioProcessor(sample_rate=22050)
+    # 4. Patch AudioProcessor (UPDATED FIX)
+    # We provide specific FFT parameters so it doesn't try (and fail) to calculate them.
+    model.ap = AudioProcessor(
+        sample_rate=22050,
+        n_fft=1024,
+        win_length=1024,
+        hop_length=256,
+        do_trim_silence=False,
+        do_sound_norm=False
+    )
         
     # -------------------------------------------------------------
 
