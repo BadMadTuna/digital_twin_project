@@ -79,11 +79,29 @@ def train_xtts():
     print("⬇️  Loading XTTS v2 Base...")
     model = Xtts.init_from_config(config)
     
-    # Download the checkpoint manually to load pre-trained weights
-    manager = ModelManager()
-    model_path, config_path, vocab_path = manager.download_model("tts_models/multilingual/multi-dataset/xtts_v2")
+    # FIX: Manually define paths since manager.download_model is returning None
+    # Based on your logs, the model is located here:
+    checkpoint_dir = os.path.expanduser("~/.local/share/tts/tts_models--multilingual--multi-dataset--xtts_v2")
     
-    model.load_checkpoint(config, checkpoint_path=model_path, vocab_path=vocab_path, eval=True)
+    model_path = os.path.join(checkpoint_dir, "model.pth")
+    vocab_path = os.path.join(checkpoint_dir, "vocab.json")
+    speaker_path = os.path.join(checkpoint_dir, "speakers_xtts.pth")
+
+    # Check if files exist to avoid vague errors
+    if not os.path.exists(model_path):
+        print(f"❌ Error: Model not found at {model_path}")
+        return
+
+    print(f"📂 Loading Checkpoint from: {checkpoint_dir}")
+    
+    # Load with explicit paths
+    model.load_checkpoint(
+        config, 
+        checkpoint_path=model_path, 
+        vocab_path=vocab_path, 
+        speaker_file_path=speaker_path,  # Explicitly pass this to prevent the crash
+        eval=True
+    )
 
     # 4. Load Data
     print("📂 Loading Data...")
