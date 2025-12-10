@@ -121,22 +121,27 @@ def train_xtts():
 
     # --- FINAL FIX: Complete Patch List for XTTS Compatibility ---
     
-    # 1. Patch Model Methods (Trainer expects these)
+    # 1. Patch Model Methods
     def get_criterion(): return None
     def get_auxiliary_losses(*args, **kwargs): return {}
     
     model.get_criterion = get_criterion
     model.get_auxiliary_losses = get_auxiliary_losses
 
-    # 2. Patch Manager Methods (Trainer tries to save IDs)
+    # 2. Patch Manager Methods
     if hasattr(model, "speaker_manager") and model.speaker_manager:
         model.speaker_manager.save_ids_to_file = lambda path: None
     if hasattr(model, "language_manager") and model.language_manager:
         model.language_manager.save_ids_to_file = lambda path: None
 
-    # 3. Patch Tokenizer (Dataset loader checks for phoneme flag) <--- NEW FIX
+    # 3. Patch Tokenizer (The fix for your current error)
     if hasattr(model, "tokenizer") and model.tokenizer:
-        model.tokenizer.use_phonemes = False 
+        model.tokenizer.use_phonemes = False  # Previous fix
+        
+        # NEW FIX: Add dummy print_logs method
+        def tokenizer_print_logs(level=0):
+            pass
+        model.tokenizer.print_logs = tokenizer_print_logs
         
     # -------------------------------------------------------------
 
