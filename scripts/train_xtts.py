@@ -148,6 +148,7 @@ def train_xtts():
         n_fft=1024,
         win_length=1024,
         hop_length=256,
+        num_mels=80,
         do_trim_silence=False,
         do_sound_norm=False
     )
