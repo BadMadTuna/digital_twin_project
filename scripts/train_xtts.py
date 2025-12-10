@@ -58,10 +58,10 @@ def train_xtts():
 
     # 2. XTTS Configuration
     config = XttsConfig(
-        batch_size=4,   # XTTS is heavy, keep batch size low (4-8)
+        batch_size=8,   # XTTS is heavy, keep batch size low (4-8)
         eval_batch_size=2,
-        num_loader_workers=4,
-        num_eval_loader_workers=2,
+        num_loader_workers=2,
+        num_eval_loader_workers=1,
         run_eval=True,
         test_delay_epochs=-1,
         epochs=15,      # <--- XTTS converges VERY fast. 15 is usually enough.
