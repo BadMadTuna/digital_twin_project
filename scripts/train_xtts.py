@@ -156,17 +156,17 @@ def train_xtts():
         do_sound_norm=False
     )
 
-    # 5. Patch train_step (FINAL POSITIONAL FIX)
-    # Since keyword arguments are failing (empty signature), we pass arguments
-    # POSITIONALLY in the standard XTTS order:
-    # (text_inputs, text_lengths, audio_codes, wav_lengths, cond_mels)
+    # 5. Patch train_step (FINAL "DIRECT GPT" BYPASS)
+    # Since Xtts.forward is rejecting standard arguments, we bypass it and 
+    # call the underlying 'model.gpt' directly. This is the core engine 
+    # and has a reliable signature.
     def train_step_wrapper(batch, criterion=None):
-        # --- 1. PREPARE TEXT ---
-        # Generic loader gives 'text_input', we want the tensor
+        # --- 1. Prepare Text Inputs ---
+        # Generic loader gives 'text_input', XTTS GPT needs 'text_inputs'
         text_inputs = batch.get("text_input")
         text_lengths = batch.get("text_lengths")
         
-        # --- 2. PREPARE AUDIO (Fallback Logic) ---
+        # --- 2. Prepare Audio Inputs (Fallback Logic) ---
         wav = None
         # Try finding existing tensor
         for k in ["audio", "waveform"]:
@@ -178,6 +178,7 @@ def train_xtts():
         if wav is None and "audio_file" in batch:
              wavs = []
              for path in batch["audio_file"]:
+                 # Load raw audio
                  w = model.ap.load_wav(path)
                  w = torch.tensor(w).float().to(model.device)
                  wavs.append(w)
@@ -188,8 +189,7 @@ def train_xtts():
              for i, w in enumerate(wavs):
                  wav[i, 0, :w.shape[0]] = w
                  
-        # --- 3. COMPUTE XTTS INPUTS ---
-        # We need to calculate codes and lengths from the audio
+        # --- 3. Compute Conditioning & Codes ---
         audio_codes = None
         wav_lengths = None
         cond_mels = None
@@ -198,32 +198,34 @@ def train_xtts():
             if wav.dim() == 2: wav = wav.unsqueeze(1)
             ref_wav = wav.to(model.device)
             
-            # Calculate Lengths (Shape: [Batch])
-            # We assume the raw wav length corresponds to the latent length logic
-            # For XTTS, usually: code_len = wav_len / hop_length (approx)
-            # But simpler: just get the codes first, then check their length.
-            
             with torch.no_grad():
-                # Conditioning
+                # Conditioning Latents
                 mask = torch.ones(ref_wav.shape[0], 1, device=ref_wav.device)
                 cond_mels = model.cond_stage_model(ref_wav, mask=mask)
                 
-                # Codes
-                # DVAE returns (Batch, Time)
+                # Discrete Audio Codes (Target)
                 audio_codes = model.dvae.get_codebook_indices(ref_wav)
                 
-            # Compute lengths from the generated codes
+            # Lengths
             wav_lengths = torch.tensor([audio_codes.shape[1]] * audio_codes.shape[0], device=model.device)
 
-        # --- 4. CALL MODEL POSITIONALLY ---
-        # Order: text_inputs, text_lengths, audio_codes, wav_lengths, cond_mels
-        return model(
-            text_inputs, 
-            text_lengths, 
-            audio_codes, 
-            wav_lengths, 
-            cond_mels
+        # --- 4. CALL GPT DIRECTLY ---
+        # We bypass model.forward and hit the Transformer directly.
+        # This returns the loss automatically.
+        outputs = model.gpt(
+            text_inputs=text_inputs,
+            text_lengths=text_lengths,
+            audio_codes=audio_codes,
+            wav_lengths=wav_lengths,
+            cond_mels=cond_mels,
+            return_attentions=False
         )
+        
+        # --- 5. FORMAT FOR TRAINER ---
+        # The Trainer expects (outputs, loss_dict)
+        loss_dict = {"loss": outputs["loss"]}
+        
+        return outputs, loss_dict
 
     model.train_step = train_step_wrapper
     # --------------------------------
