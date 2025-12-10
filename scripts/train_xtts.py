@@ -162,12 +162,15 @@ def train_xtts():
         do_sound_norm=False
     )
 
-    # 5. Patch train_step (NEW FIX)
-    # The Trainer passes 'criterion' to this function, but XTTS doesn't accept it.
-    # We create a wrapper to accept the extra argument and ignore it.
-    original_train_step = model.train_step
-    def train_step_wrapper(batch, criterion):
-        return original_train_step(batch)
+    # 5. Patch train_step (FINAL ROBUST FIX)
+    # The Generic Trainer passes (batch, criterion) to this function.
+    # XTTS.train_step only wants (batch).
+    # We fix the "Takes 1 but 2 given" error by calling the Class method directly.
+    def train_step_wrapper(batch, criterion=None):
+        return Xtts.train_step(model, batch)
+    
+    # We assign it as a plain function so the Trainer simply calls it 
+    # as model.train_step(batch, criterion)
     model.train_step = train_step_wrapper
     # -------------------------------------------------------------
 
