@@ -156,77 +156,75 @@ def train_xtts():
         do_sound_norm=False
     )
 
-    # 5. Patch train_step (FINAL DEBUG ADAPTER)
+    # 5. Patch train_step (FINAL POSITIONAL FIX)
+    # Since keyword arguments are failing (empty signature), we pass arguments
+    # POSITIONALLY in the standard XTTS order:
+    # (text_inputs, text_lengths, audio_codes, wav_lengths, cond_mels)
     def train_step_wrapper(batch, criterion=None):
-        inputs = {}
-
-        # --- A. DEBUG: PRINT SIGNATURE ONCE ---
-        # This will print the EXACT arguments your model expects to the console.
-        if not hasattr(train_step_wrapper, "signature_checked"):
-            import inspect
-            sig = inspect.signature(model.forward)
-            print("\n🔍 DEBUG: Model Forward Arguments:", list(sig.parameters.keys()))
-            train_step_wrapper.signature_checked = True
-
-        # --- B. MAP TEXT ---
-        # We try mapping the text input to all likely names until one sticks.
-        # This prevents the "unexpected keyword" error.
-        text_data = batch.get("text_input")
-        if text_data is not None:
-            # Common names for XTTS text inputs
-            possible_names = ["text_inputs", "token_ids", "input_ids"]
-            
-            # Find which one exists in the model signature
-            import inspect
-            sig_params = inspect.signature(model.forward).parameters
-            
-            found_name = None
-            for name in possible_names:
-                if name in sig_params:
-                    inputs[name] = text_data
-                    found_name = name
-                    break
-            
-            # Fallback if we couldn't match any name automatically
-            if not found_name:
-                inputs["text_inputs"] = text_data # Default fallback
-
-        if "text_lengths" in batch:
-            inputs["text_lengths"] = batch["text_lengths"]
-            
-        # --- C. HANDLE AUDIO (Fallback Logic) ---
+        # --- 1. PREPARE TEXT ---
+        # Generic loader gives 'text_input', we want the tensor
+        text_inputs = batch.get("text_input")
+        text_lengths = batch.get("text_lengths")
+        
+        # --- 2. PREPARE AUDIO (Fallback Logic) ---
         wav = None
+        # Try finding existing tensor
         for k in ["audio", "waveform"]:
              if k in batch and batch[k] is not None:
                  wav = batch[k]
                  break
         
+        # Fallback: Load from disk
         if wav is None and "audio_file" in batch:
              wavs = []
              for path in batch["audio_file"]:
                  w = model.ap.load_wav(path)
                  w = torch.tensor(w).float().to(model.device)
                  wavs.append(w)
+             
+             # Pad
              max_len = max([w.shape[0] for w in wavs])
              wav = torch.zeros(len(wavs), 1, max_len, device=model.device)
              for i, w in enumerate(wavs):
                  wav[i, 0, :w.shape[0]] = w
-
+                 
+        # --- 3. COMPUTE XTTS INPUTS ---
+        # We need to calculate codes and lengths from the audio
+        audio_codes = None
+        wav_lengths = None
+        cond_mels = None
+        
         if wav is not None:
             if wav.dim() == 2: wav = wav.unsqueeze(1)
             ref_wav = wav.to(model.device)
+            
+            # Calculate Lengths (Shape: [Batch])
+            # We assume the raw wav length corresponds to the latent length logic
+            # For XTTS, usually: code_len = wav_len / hop_length (approx)
+            # But simpler: just get the codes first, then check their length.
+            
             with torch.no_grad():
+                # Conditioning
                 mask = torch.ones(ref_wav.shape[0], 1, device=ref_wav.device)
                 cond_mels = model.cond_stage_model(ref_wav, mask=mask)
+                
+                # Codes
+                # DVAE returns (Batch, Time)
                 audio_codes = model.dvae.get_codebook_indices(ref_wav)
                 
-            inputs["audio_codes"] = audio_codes
-            inputs["cond_mels"] = cond_mels
-            inputs["cond_refs"] = cond_mels 
+            # Compute lengths from the generated codes
+            wav_lengths = torch.tensor([audio_codes.shape[1]] * audio_codes.shape[0], device=model.device)
 
-        # --- D. CALL MODEL ---
-        return model(**inputs)
-    
+        # --- 4. CALL MODEL POSITIONALLY ---
+        # Order: text_inputs, text_lengths, audio_codes, wav_lengths, cond_mels
+        return model(
+            text_inputs, 
+            text_lengths, 
+            audio_codes, 
+            wav_lengths, 
+            cond_mels
+        )
+
     model.train_step = train_step_wrapper
     # --------------------------------
 
