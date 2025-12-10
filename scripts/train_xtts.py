@@ -72,6 +72,12 @@ def train_xtts():
     print(f"⚙️  Loading Config from: {config_path}")
     config = load_config(config_path)
 
+    # --- FIX: Inject missing attribute for BaseTTS compatibility ---
+    # The generic trainer checks this flag to decide how to handle speaker IDs,
+    # but XTTS config doesn't have it by default.
+    config.model_args.use_speaker_embedding = True
+    # ---------------------------------------------------------------
+
     # Update the loaded config with your training preferences
     config.batch_size = 8
     config.eval_batch_size = 2
