@@ -113,16 +113,22 @@ def train_xtts():
 
     # --- FIX: Patch the model to avoid AttributeErrors ---
     
-    # 1. Patch 'get_criterion' (Trainer expects it, XTTS doesn't have it)
+    # 1. Patch 'get_criterion'
     def get_criterion():
         return None
     model.get_criterion = get_criterion
 
-    # 2. Patch 'save_ids_to_file' (Trainer tries to save speaker IDs, XTTS doesn't use them this way)
+    # 2. Patch 'save_ids_to_file' for SpeakerManager
     if hasattr(model, "speaker_manager") and model.speaker_manager:
-        def save_ids_to_file(path):
+        def save_speaker_ids(path):
             pass # Do nothing
-        model.speaker_manager.save_ids_to_file = save_ids_to_file
+        model.speaker_manager.save_ids_to_file = save_speaker_ids
+
+    # 3. Patch 'save_ids_to_file' for LanguageManager (NEW FIX)
+    if hasattr(model, "language_manager") and model.language_manager:
+        def save_language_ids(path):
+            pass # Do nothing
+        model.language_manager.save_ids_to_file = save_language_ids
     
     # -----------------------------------------------------
 
