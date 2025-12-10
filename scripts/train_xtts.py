@@ -67,7 +67,7 @@ def train_xtts():
         epochs=15,      # <--- XTTS converges VERY fast. 15 is usually enough.
         text_cleaner="whitespace_cleaner",
         use_phonemes=False, # XTTS uses GPT-2 BPE, not phonemes
-        language=LANGUAGE,
+        #language=LANGUAGE,
         print_step=50,
         print_eval=True,
         save_step=500,
