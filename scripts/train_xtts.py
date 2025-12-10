@@ -156,48 +156,61 @@ def train_xtts():
         do_sound_norm=False
     )
 
-    # E. Patch train_step (THE CRITICAL ADAPTER)
-    # This wrapper adapts the Generic Trainer batch (text_input, waveform) 
-    # to the XTTS Model signature (token_ids, audio_codes, cond_mels).
+    # 5. Patch train_step (FINAL ROBUST ADAPTER)
     def train_step_wrapper(batch, criterion=None):
         inputs = {}
 
-        # 1. Map Text
-        # XTTS v2 usually wants 'token_ids' for the text indices
+        # 1. Map Text (Try 'token_ids' or 'text_input')
         if "text_input" in batch:
             inputs["token_ids"] = batch["text_input"]
-        
         if "text_lengths" in batch:
             inputs["text_lengths"] = batch["text_lengths"]
             
-        # 2. Compute Audio Codes & Conditioning (On the fly)
-        # The loader gives us raw audio ("waveform"). We must run it through 
-        # the model's DVAE and Conditioning encoder to get the inputs XTTS needs.
-        wav_key = "audio" if "audio" in batch else "waveform"
-        if wav_key in batch:
-            wav = batch[wav_key]
-            # Ensure (Batch, 1, Time) format
+        # 2. Handle Audio (Robust Fallback Logic)
+        wav = None
+        
+        # A. Try fetching existing tensor from batch
+        for k in ["audio", "waveform"]:
+             if k in batch and batch[k] is not None:
+                 wav = batch[k]
+                 break
+        
+        # B. Fallback: Load from disk if tensor is missing/None
+        # (This fixes the 'NoneType' error you are seeing)
+        if wav is None and "audio_file" in batch:
+             wavs = []
+             for path in batch["audio_file"]:
+                 # Load raw audio using the patched processor
+                 w = model.ap.load_wav(path)
+                 w = torch.tensor(w).float().to(model.device)
+                 wavs.append(w)
+             
+             # Pad and Stack to create (Batch, 1, Time)
+             max_len = max([w.shape[0] for w in wavs])
+             wav = torch.zeros(len(wavs), 1, max_len, device=model.device)
+             for i, w in enumerate(wavs):
+                 wav[i, 0, :w.shape[0]] = w
+
+        # 3. Compute Codes & Conditioning
+        if wav is not None:
+            # Ensure correct dimensions (Batch, 1, Time)
             if wav.dim() == 2: 
                 wav = wav.unsqueeze(1)
             
-            # Move to GPU for calculation
             ref_wav = wav.to(model.device)
             
             with torch.no_grad():
-                # A. Calculate Speaker Conditioning (Mel Spectrograms)
-                # Note: condition_on_audio calls the Hifigan/DVAE internally or cond_stage_model
-                # We use the internal 'cond_stage_model' to get the latents
+                # A. Conditioning Latents
                 mask = torch.ones(ref_wav.shape[0], 1, device=ref_wav.device)
                 cond_mels = model.cond_stage_model(ref_wav, mask=mask)
                 
-                # B. Calculate Discrete Audio Codes (The target for the model)
-                # XTTS uses a VQ-VAE (DVAE) to turn audio into code indices
+                # B. Discrete Audio Codes
+                # XTTS v2 uses the DVAE to get codebook indices
                 audio_codes = model.dvae.get_codebook_indices(ref_wav)
-
-            # 3. Add Calculated Inputs
+                
             inputs["audio_codes"] = audio_codes
             inputs["cond_mels"] = cond_mels
-            inputs["cond_refs"] = cond_mels 
+            inputs["cond_refs"] = cond_mels
 
         # 4. Call Model
         return model(**inputs)
