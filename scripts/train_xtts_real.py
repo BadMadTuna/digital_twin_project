@@ -112,9 +112,11 @@ def main():
     config.load_json(os.path.join(CHECKPOINT_DIR, "config.json"))
 
     # Update config for fine-tuning
-    config.dataset_config.datasets = [
+    # Update config for fine-tuning
+    # REMOVED .dataset_config here:
+    config.datasets = [
         BaseDatasetConfig(
-            formatter="xtts",  # Uses the internal XTTS formatter
+            formatter="xtts",
             meta_file_train=train_json,
             meta_file_val=eval_json,
             path=os.getcwd(),
