@@ -140,11 +140,15 @@ def main():
     model.load_checkpoint(config, checkpoint_dir=CHECKPOINT_DIR, eval=True)
 
     # =========================================================================
-    # 🛠️ CRITICAL FIX: MONKEY-PATCH get_criterion
-    # The generic Trainer expects this method, but XTTS calculates loss internally.
-    # We add a dummy lambda function to prevent the AttributeError.
+    # 🛠️ CRITICAL FIX 1: MONKEY-PATCH get_criterion
     # =========================================================================
     model.get_criterion = lambda: None
+
+    # =========================================================================
+    # 🛠️ CRITICAL FIX 2: MONKEY-PATCH save_ids_to_file
+    # =========================================================================
+    if model.speaker_manager is not None:
+        model.speaker_manager.save_ids_to_file = lambda x: None
 
     if torch.cuda.is_available():
         model.cuda()
