@@ -6,10 +6,12 @@ from TTS.tts.configs.xtts_config import XttsConfig
 from TTS.tts.models.xtts import Xtts
 from TTS.utils.audio import AudioProcessor
 from TTS.utils.manage import ModelManager 
-from TTS.tts.layers.xtts.tokenizer import VoiceBpeTokenizer # Import the specific class
+from TTS.tts.layers.xtts.tokenizer import VoiceBpeTokenizer
+
 # --------------------------------------------------------------------------
 # --- CONFIGURATION ---
 MODEL_DIR = "/home/ubuntu/digital_twin_project/models/xtts_finetuned-December-11-2025_01+15PM-3e81100"
+# Use the checkpoint you verified exists
 MODEL_CHECKPOINT_NAME = "checkpoint_3070.pth" 
 MODEL_CHECKPOINT_PATH = os.path.join(MODEL_DIR, MODEL_CHECKPOINT_NAME)
 CONFIG_PATH = os.path.join(MODEL_DIR, "config.json")
@@ -31,10 +33,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 manager = ModelManager()
 model_path_tuple = manager.download_model("tts_models/multilingual/multi-dataset/xtts_v2")
 BASE_MODEL_DIR = os.path.dirname(model_path_tuple[0])
-
-# Construct file paths for the tokenizer
-VOCAB_FILE = os.path.join(BASE_MODEL_DIR, 'vocab.json')
-TOKENIZER_FILE = os.path.join(BASE_MODEL_DIR, 'tokenizer.json')
+VOCAB_FILE = os.path.join(BASE_MODEL_DIR, 'vocab.json') # We only need this one
 
 print("Loading model architecture...")
 config = XttsConfig()
@@ -46,13 +45,9 @@ if hasattr(config.audio, 'frame_shift_ms'): delattr(config.audio, 'frame_shift_m
 
 model = Xtts.init_from_config(config)
 
-# 🛠️ TOKENIZER FIX: Manually instantiate the tokenizer using the constructor
-print("Manually loading VoiceBpeTokenizer via constructor...")
-model.tokenizer = VoiceBpeTokenizer(
-    config=config, 
-    vocab_file=VOCAB_FILE, 
-    model_file=TOKENIZER_FILE
-)
+# 🛠️ TOKENIZER FIX: Correctly instantiate with only the vocab_file argument
+print("Manually loading VoiceBpeTokenizer...")
+model.tokenizer = VoiceBpeTokenizer(vocab_file=VOCAB_FILE)
 
 # 2. Load Weights
 print(f"Loading weights from {MODEL_CHECKPOINT_PATH}...")
@@ -67,8 +62,8 @@ model.eval()
 # 3. Initialize Audio Processor (Stabilized Configuration)
 print("Initializing AudioProcessor...")
 
-# Final robust parameter access
 SR = config.audio.sample_rate
+# Robust parameter access with fallbacks
 NFFT = getattr(config.audio, 'n_fft', getattr(config.audio, 'fft_size', 1024))
 WL = getattr(config.audio, 'win_length', NFFT)
 HL = getattr(config.audio, 'hop_length', getattr(config.audio, 'frame_shift', 256))
@@ -99,7 +94,6 @@ try:
     
     with torch.no_grad():
         speaker_embedding = model.gpt.get_conditioning(mels)
-        # Global Average Pooling Fix
         gpt_cond_latent = speaker_embedding.mean(dim=2, keepdim=False).squeeze(0)
     
     gpt_cond_latent = gpt_cond_latent.unsqueeze(0)
