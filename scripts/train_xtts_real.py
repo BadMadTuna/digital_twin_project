@@ -174,16 +174,21 @@ def main():
             hop_length=256
         )
 
-    # Patch 7: Train Step (Bypass Patch)
-    # The original train_step is broken (accepts 0 arguments).
-    # We replace it with a function that calls forward() directly.
+    # Patch 7: Train Step (Bypass Patch with Key Mapping)
+    # The original train_step is broken, and the batch keys don't match forward().
     def patched_train_step(self, batch, criterion=None):
-        # We assume 'batch' contains exactly what the model expects.
-        # We pass it as kwargs to the forward pass.
+        # 🛠️ FIX: Rename 'text_input' to 'text_inputs'
+        if "text_input" in batch:
+            batch["text_inputs"] = batch.pop("text_input")
+            
+        # 🛠️ FIX: Rename 'audio_unique_name' (if present) just to be safe
+        # (XTTS doesn't use it in forward, but extra keys usually don't hurt unless strict)
+        
+        # Pass the corrected batch to the forward pass
         outputs = self.forward(**batch)
         
         # Trainer expects (outputs, loss_dict).
-        # XTTS output is a dictionary that includes losses, so we return it for both.
+        # XTTS outputs are already a dict containing the losses.
         return outputs, outputs
     
     # Bind the new method to the instance
