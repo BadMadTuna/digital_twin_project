@@ -27,6 +27,7 @@ SPEAKER_NAME = "my_speaker"
 BATCH_SIZE = 2 
 EPOCHS = 10
 LEARNING_RATE = 5e-6
+SAVE_STEP = 1000
 
 # -------------------------------------------------------------------------
 # DATA HELPERS
