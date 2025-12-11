@@ -214,7 +214,7 @@ def main():
     model.fixed_speaker_latent = speaker_latent
 
     # -------------------------------------------------------------------------
-    # 🛠️ PATCH 7: CUSTOM GPT TRAINING STEP (FINAL FIX)
+    # 🛠️ PATCH 7: CUSTOM GPT TRAINING STEP (FINAL CLEANUP)
     # -------------------------------------------------------------------------
     def patched_train_step(self, batch, criterion=None):
         text_inputs = batch.get("text_input")
@@ -233,14 +233,14 @@ def main():
         batch_size = text_inputs.shape[0]
         cond_latents = self.fixed_speaker_latent.expand(batch_size, -1)
 
-        # 4. Train GPT (Added missing language_ids)
+        # 4. Train GPT (Cleaned Arguments)
         outputs = self.gpt(
             text_inputs=text_inputs,
             text_lengths=text_lengths,
             audio_codes=audio_codes,
             cond_latents=cond_latents,
-            wav_lengths=mel_lengths, # Corrected argument name
-            language_ids=torch.zeros(batch_size, dtype=torch.long, device=text_inputs.device) # <--- FINAL ARGUMENT FIX
+            wav_lengths=mel_lengths  # Corrected argument name
+            # Removed rejected argument 'language_ids'
         )
         return outputs, outputs
 
