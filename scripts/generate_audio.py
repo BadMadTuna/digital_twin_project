@@ -16,7 +16,7 @@ MODEL_CHECKPOINT_NAME = "checkpoint_5000.pth"
 MODEL_CHECKPOINT_PATH = os.path.join(MODEL_DIR, MODEL_CHECKPOINT_NAME)
 CONFIG_PATH = os.path.join(MODEL_DIR, "config.json")
 
-REFERENCE_WAV_PATH = "audio_data/dataset/wavs/segment_0330.wav"
+REFERENCE_WAV_PATH = "audio_data/dataset/wavs/segment_0328.wav"
 OUTPUT_WAV_PATH = "output_fine_tuned_test.wav"
 TARGET_TEXT = "Have you heard about Deep Resolve, our lord and savior? It is an absolute game changer for magnetic resonance imaging."
 LANGUAGE = "en"
