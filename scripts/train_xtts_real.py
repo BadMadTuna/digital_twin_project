@@ -218,12 +218,16 @@ def main():
     with torch.no_grad():
         feature_map = model.gpt.get_conditioning(mels) 
         
-        # 🛠️ FINAL DIMENSIONAL FIX: Pool feature map [1, 1, C, T] -> [1, C]
-        # We average across the last two dimensions (C and T) and remove the singleton batch dim (0).
-        # We also remove the sequence dimension (1) which is size 1.
+        # 🛠️ FINAL DIMENSIONAL FIX: Pool feature map [B, S, C, T] -> [B, D]
+        # We average over the Time axis (dim -1) and the Sequence axis (dim 1)
+        # Note: We must explicitly keep the batch dim (0) and the feature dim (2)
         
-        # Correct averaging and final squeeze
-        speaker_latent = feature_map.mean(dim=[1, 3], keepdim=False).squeeze(0)
+        # Correctly pool the 4D tensor down to a 2D tensor [1, 1024]
+        speaker_latent = feature_map.mean(dim=[1, 3], keepdim=False)
+        
+        # Since B=1, we squeeze the batch dimension too if it was kept
+        if speaker_latent.dim() == 2 and speaker_latent.shape[0] == 1:
+            speaker_latent = speaker_latent.squeeze(0)
         
         print(f"✅ Speaker Latent Computed: {speaker_latent.shape}")
         
@@ -247,46 +251,8 @@ def main():
             audio_codes = self.dvae.get_codebook_indices(mel_inputs_transposed)
 
         # 3. Use Pre-computed Speaker Latent
-        # FINAL DIMENSION FIX: Unsqueeze and expand the 512/1024-dim latent to 3D for concatenation [B, 1, D]
-        batch_size = text_inputs.shape[0]
-        # self.fixed_speaker_latent is [D] or [1, D]. We ensure [1, D] then unsqueeze(1)
+        # We assume self.fixed_speaker_latent is now [D] or [1, D]
         if self.fixed_speaker_latent.dim() == 1:
             latent_2d = self.fixed_speaker_latent.unsqueeze(0)
         else:
             latent_2d = self.fixed_speaker_latent
-            
-        cond_latents_3d = latent_2d.unsqueeze(1).expand(batch_size, -1, -1)
-
-        # 4. Train GPT (Final Call)
-        outputs = self.gpt(
-            text_inputs=text_inputs,
-            text_lengths=text_lengths,
-            audio_codes=audio_codes,
-            wav_lengths=mel_lengths,
-            cond_mels=cond_latents_3d,   
-            cond_latents=cond_latents_3d 
-        )
-        
-        # 5. Extract and return loss
-        loss_text, loss_mel, mel_logits = outputs
-        total_loss = loss_text + loss_mel
-        
-        return outputs, {"loss": total_loss, "loss_text": loss_text, "loss_mel": loss_mel}
-
-    model.train_step = types.MethodType(patched_train_step, model)
-    # -------------------------------------------------------------------------
-
-    print("⏳ Loading data samples...")
-    train_samples = load_json_data(train_json)
-    eval_samples = load_json_data(eval_json)
-
-    trainer = Trainer(
-        TrainerArgs(restore_path=None, skip_train_epoch=False, start_with_eval=False),
-        config, output_path=OUT_PATH, model=model, train_samples=train_samples, eval_samples=eval_samples,   
-    )
-
-    print("🚀 Starting Training...")
-    trainer.fit()
-
-if __name__ == "__main__":
-    main()
