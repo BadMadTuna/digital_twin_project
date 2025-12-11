@@ -179,6 +179,12 @@ def main():
             do_trim_silence=True
         )
     
+    # Patch 7: Train Step Signature
+    # The Trainer passes 'criterion' to the model, but XTTS only accepts 'batch'.
+    # We wrap the function to simply discard the extra 'criterion' argument.
+    _original_train_step = model.train_step
+    model.train_step = lambda batch, criterion=None: _original_train_step(batch)
+
     # =========================================================================
 
     # 5. Load Data manually to avoid internal loader errors
