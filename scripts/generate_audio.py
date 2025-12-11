@@ -5,8 +5,8 @@ import numpy as np
 from TTS.tts.configs.xtts_config import XttsConfig
 from TTS.tts.models.xtts import Xtts
 from TTS.utils.audio import AudioProcessor
-from TTS.utils.manage import ModelManager # Retained for context
-
+from TTS.utils.manage import ModelManager 
+from TTS.tts.layers.xtts.tokenizer import VoiceBpeTokenizer # Import the specific class
 # --------------------------------------------------------------------------
 # --- CONFIGURATION ---
 MODEL_DIR = "/home/ubuntu/digital_twin_project/models/xtts_finetuned-December-11-2025_01+15PM-3e81100"
@@ -42,9 +42,10 @@ if hasattr(config.audio, 'frame_shift_ms'): delattr(config.audio, 'frame_shift_m
 
 model = Xtts.init_from_config(config)
 
-# 🛠️ TOKENIZER FIX: Run initialization directly to bypass crashing __len__ check
-print("Initializing XttsTokenizer...")
-model.tokenizer.init_from_config(config, BASE_MODEL_DIR)
+# 🛠️ TOKENIZER FIX: Manually instantiate and assign the tokenizer
+print("Manually loading VoiceBpeTokenizer...")
+# The VoiceBpeTokenizer constructor loads the required files from the path
+model.tokenizer = VoiceBpeTokenizer.init_from_config(config, directory=BASE_MODEL_DIR)
 
 # 2. Load Weights
 print(f"Loading weights from {MODEL_CHECKPOINT_PATH}...")
@@ -64,6 +65,7 @@ SR = config.audio.sample_rate
 NFFT = getattr(config.audio, 'n_fft', getattr(config.audio, 'fft_size', 1024))
 WL = getattr(config.audio, 'win_length', NFFT)
 HL = getattr(config.audio, 'hop_length', getattr(config.audio, 'frame_shift', 256))
+NUM_MELS = getattr(config.audio, 'num_mels', 80)
 
 # Calculate the millisecond values to inject as non-None floats
 frame_length_ms = WL * 1000 / SR
@@ -71,7 +73,7 @@ frame_shift_ms = HL * 1000 / SR
 
 # Prepare the dictionary
 audio_config_dict = {k: v for k, v in config.audio.to_dict().items() if v is not None}
-audio_config_dict["num_mels"] = getattr(config.audio, 'num_mels', 80)
+audio_config_dict["num_mels"] = NUM_MELS
 audio_config_dict["frame_length_ms"] = frame_length_ms
 audio_config_dict["frame_shift_ms"] = frame_shift_ms
 
