@@ -65,24 +65,16 @@ def load_json_data(json_file):
 # 🛠️ RESURRECTION UTILITY: REBUILD MISSING VQGAN
 # -------------------------------------------------------------------------
 def resurrect_dvae(model, checkpoint_dir):
-    """
-    Manually instantiates and loads the DVAE (VQGAN) module.
-    This is necessary because inference-optimized Xtts objects often skip loading the Encoder.
-    """
     print("✨ Attempting to resurrect missing VQGAN/DVAE...")
     
-    # 1. Try to import the class (Tortoise DVAE is standard for XTTS v2)
+    # 🛠️ FIX: Use the specific path found by the pathfinder script
     try:
-        from TTS.tts.layers.tortoise.dvae import DiscreteVAE
-    except ImportError:
-        try:
-            from TTS.tts.models.xtts.dvae import DiscreteVAE
-        except ImportError:
-            print("❌ Could not import DiscreteVAE class. Cannot train.")
-            sys.exit(1)
+        from TTS.tts.layers.xtts.dvae import DiscreteVAE
+    except ImportError as e:
+        print(f"❌ Could not import DiscreteVAE: {e}")
+        sys.exit(1)
 
-    # 2. Instantiate the DVAE with standard XTTS settings
-    # These are hardcoded defaults for XTTS v2
+    # Instantiate DVAE with standard XTTS v2 settings
     dvae = DiscreteVAE(
         channels=80, 
         normalization=None, 
@@ -95,37 +87,21 @@ def resurrect_dvae(model, checkpoint_dir):
         num_layers=2
     )
     
-    # 3. Load weights from the main model checkpoint
-    # We look for 'model.pth' in the checkpoint dir
+    # Load weights
     model_path = os.path.join(checkpoint_dir, "model.pth")
-    if not os.path.exists(model_path):
-        print(f"❌ Could not find model.pth in {checkpoint_dir}")
-        sys.exit(1)
-        
     print(f"   Loading weights from {model_path}...")
     full_state_dict = torch.load(model_path, map_location="cpu")
     
-    # The keys in the main checkpoint usually start with "dvae."
-    # We need to strip that prefix to load it into the isolated DVAE object.
-    dvae_state_dict = {}
-    for key, value in full_state_dict.items():
-        if key.startswith("dvae."):
-            new_key = key.replace("dvae.", "")
-            dvae_state_dict[new_key] = value
+    # Filter for 'dvae.' keys
+    dvae_state_dict = {k.replace("dvae.", ""): v for k, v in full_state_dict.items() if k.startswith("dvae.")}
             
     if not dvae_state_dict:
-        print("❌ No 'dvae.' keys found in checkpoint. The VQGAN weights are missing.")
+        print("❌ No 'dvae.' keys found in checkpoint.")
         sys.exit(1)
         
-    # 4. Load the state dict
-    try:
-        dvae.load_state_dict(dvae_state_dict)
-        print("✅ DVAE weights loaded successfully.")
-    except Exception as e:
-        print(f"❌ Failed to load DVAE weights: {e}")
-        sys.exit(1)
+    dvae.load_state_dict(dvae_state_dict)
+    print("✅ DVAE weights loaded successfully.")
 
-    # 5. Move to GPU if needed and attach to model
     if torch.cuda.is_available():
         dvae = dvae.cuda()
         
@@ -158,7 +134,7 @@ def main():
     model.load_checkpoint(config, checkpoint_dir=CHECKPOINT_DIR, eval=True)
     if torch.cuda.is_available(): model.cuda()
 
-    # --- COMPATIBILITY PATCHES ---
+    # --- PATCHES ---
     model.get_criterion = lambda: None
     if model.speaker_manager:
         model.speaker_manager.save_ids_to_file = lambda x: None
@@ -176,36 +152,31 @@ def main():
     if model.ap is None:
         model.ap = AudioProcessor(sample_rate=22050, num_mels=80, do_trim_silence=True, n_fft=1024, win_length=1024, hop_length=256)
 
-    # 🛠️ RESURRECT DVAE (VQGAN)
-    # This attaches 'model.dvae' to the object
+    # 🛠️ RESURRECT DVAE (Using corrected path)
     resurrect_dvae(model, CHECKPOINT_DIR)
 
     # -------------------------------------------------------------------------
     # 🛠️ PATCH 7: CUSTOM GPT TRAINING STEP
     # -------------------------------------------------------------------------
     def patched_train_step(self, batch, criterion=None):
-        # 1. Unpack Batch
         text_inputs = batch.get("text_input")
         text_lengths = batch.get("text_lengths")
         mel_inputs = batch.get("mel_input")
         mel_lengths = batch.get("mel_lengths")
 
-        # 2. Compute Audio Codes using our resurrected DVAE
+        # Compute Codes
         with torch.no_grad():
-            # encode() returns (z, loss, info). info[2] contains the indices (codes).
-            # We call the DVAE we just attached.
             _, _, info = self.dvae.encode(mel_inputs)
             audio_codes = info[2] # [B, T]
 
-        # 3. Compute Conditioning Latents
+        # Compute Latents
         with torch.no_grad():
             if hasattr(self, "speaker_encoder"):
                 cond_latents = self.speaker_encoder(mel_inputs)
             else:
-                # Fallback to hifigan decoder if speaker_encoder is merged there
                 cond_latents = self.hifigan_decoder(mel_inputs, return_latents=True)
 
-        # 4. Train GPT
+        # Train GPT
         outputs = self.gpt(
             text_inputs=text_inputs,
             text_lengths=text_lengths,
