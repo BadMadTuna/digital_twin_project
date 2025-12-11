@@ -4,7 +4,6 @@ import json
 import random
 import torch
 import types
-import sys
 from TTS.utils.manage import ModelManager
 from TTS.utils.audio import AudioProcessor
 from trainer import Trainer, TrainerArgs
@@ -27,10 +26,11 @@ EPOCHS = 10
 LEARNING_RATE = 5e-6
 
 # -------------------------------------------------------------------------
-# SETUP HELPERS
+# DATA FORMATTING
 # -------------------------------------------------------------------------
 def format_dataset(csv_file, train_json, eval_json):
     if not os.path.exists(csv_file): raise FileNotFoundError(f"❌ Could not find {csv_file}")
+    print("Converting metadata.csv to XTTS JSON format...")
     items = []
     with open(csv_file, 'r', encoding='utf-8') as f:
         reader = csv.reader(f, delimiter='|')
@@ -45,8 +45,9 @@ def format_dataset(csv_file, train_json, eval_json):
                 "language": LANGUAGE
             })
     random.shuffle(items)
-    train_items = items[:int(len(items)*0.9)]
-    eval_items = items[int(len(items)*0.9):]
+    split_idx = int(len(items) * 0.9)
+    train_items = items[:split_idx]
+    eval_items = items[split_idx:]
     with open(train_json, "w", encoding="utf-8") as f:
         for item in train_items: f.write(json.dumps(item) + "\n")
     with open(eval_json, "w", encoding="utf-8") as f:
@@ -58,6 +59,37 @@ def load_json_data(json_file):
     with open(json_file, "r", encoding="utf-8") as f:
         for line in f: data.append(json.loads(line))
     return data
+
+# -------------------------------------------------------------------------
+# 🔍 SEARCH UTILITY: FIND VQGAN
+# -------------------------------------------------------------------------
+def find_vqgan_in_model(model):
+    """Recursively searches for the VQGAN/DVAE module."""
+    print("🔍 Searching for VQGAN/DVAE in model...")
+    
+    # 1. Check known locations
+    if hasattr(model, "hifigan_decoder") and hasattr(model.hifigan_decoder, "vqgan"):
+        return model.hifigan_decoder.vqgan
+    if hasattr(model, "dvae"):
+        return model.dvae
+        
+    # 2. Recursive Search (Depth-First)
+    for name, module in model.named_modules():
+        # Check for common names
+        if name.endswith("vqgan") or name.endswith("dvae"):
+            print(f"✅ Found VQGAN at: {name}")
+            return module
+        # Check for signature method 'encode' and 'codebook' property
+        if hasattr(module, "encode") and hasattr(module, "codebook"):
+            print(f"✅ Found VQGAN (by signature) at: {name}")
+            return module
+
+    # 3. Last Resort: Check if hifigan_decoder IS the vqgan (unlikely but possible)
+    if hasattr(model, "hifigan_decoder") and hasattr(model.hifigan_decoder, "encode"):
+         return model.hifigan_decoder
+
+    print("❌ VQGAN NOT FOUND. Training will likely fail.")
+    return None
 
 # -------------------------------------------------------------------------
 # MAIN
@@ -82,10 +114,10 @@ def main():
 
     print("⬇️  Loading XTTS v2 Base Model...")
     model = Xtts.init_from_config(config)
-    # Important: Load checkpoint but don't move to GPU yet so we can inspect easily
     model.load_checkpoint(config, checkpoint_dir=CHECKPOINT_DIR, eval=True)
+    if torch.cuda.is_available(): model.cuda()
 
-    # --- PATCHES ---
+    # --- COMPATIBILITY PATCHES ---
     model.get_criterion = lambda: None
     if model.speaker_manager:
         model.speaker_manager.save_ids_to_file = lambda x: None
@@ -103,35 +135,74 @@ def main():
     if model.ap is None:
         model.ap = AudioProcessor(sample_rate=22050, num_mels=80, do_trim_silence=True, n_fft=1024, win_length=1024, hop_length=256)
 
-    # -------------------------------------------------------------------------
-    # 🔍 SEARCH PARTY: RECURSIVE MODULE INSPECTION
-    # -------------------------------------------------------------------------
-    print("\n" + "="*50)
-    print("🔍 INSPECTING MODEL SUB-MODULES")
-    print("="*50)
-    
-    print("1. Direct Children of 'model':")
-    for name, module in model.named_children():
-        print(f"   - {name}: {type(module).__name__}")
-        
-    print("\n2. Direct Children of 'model.hifigan_decoder':")
-    if hasattr(model, "hifigan_decoder"):
-        for name, module in model.hifigan_decoder.named_children():
-            print(f"   - {name}: {type(module).__name__}")
-    else:
-        print("   (hifigan_decoder missing)")
+    # 🛠️ FIND AND BIND VQGAN
+    # We find the missing component and attach it to 'model.found_vqgan'
+    model.found_vqgan = find_vqgan_in_model(model)
 
-    print("\n3. Direct Children of 'model.gpt':")
-    if hasattr(model, "gpt"):
-        for name, module in model.gpt.named_children():
-            print(f"   - {name}: {type(module).__name__}")
+    # -------------------------------------------------------------------------
+    # 🛠️ PATCH 7: CUSTOM GPT TRAINING STEP
+    # -------------------------------------------------------------------------
+    def patched_train_step(self, batch, criterion=None):
+        # 1. Prepare Data Keys
+        text_inputs = batch.get("text_input")
+        text_lengths = batch.get("text_lengths")
+        mel_inputs = batch.get("mel_input")
+        mel_lengths = batch.get("mel_lengths")
+
+        # 2. Get Audio Codes (Using our discovered VQGAN)
+        if self.found_vqgan is None:
+             raise RuntimeError("Cannot train: VQGAN/DVAE not found in model.")
+             
+        with torch.no_grad():
+            # Run encoder
+            # Note: The signature of encode() might vary. Usually returns (z, loss, info).
+            # info[2] is the indices (codes).
+            ret = self.found_vqgan.encode(mel_inputs)
             
-    print("="*50 + "\n")
-    sys.exit("⛔ Stopping for inspection.")
+            # Robust extraction of codes:
+            if isinstance(ret, tuple) and len(ret) == 3:
+                # Standard Coqui VQGAN returns (z, quant_loss, (perplexity, min_encodings, INDICES))
+                audio_codes = ret[2][2] 
+            elif isinstance(ret, tuple) and len(ret) > 0:
+                 # Fallback guess: typically the last item or the indices tensor
+                 audio_codes = ret[-1]
+            else:
+                 # If it just returns codes
+                 audio_codes = ret
+                 
+        # 3. Get Conditioning Latents
+        with torch.no_grad():
+            if hasattr(self, "speaker_encoder"):
+                cond_latents = self.speaker_encoder(mel_inputs)
+            else:
+                # Try hifigan decoder as fallback
+                cond_latents = self.hifigan_decoder(mel_inputs, return_latents=True)
 
+        # 4. Train GPT
+        outputs = self.gpt(
+            text_inputs=text_inputs,
+            text_lengths=text_lengths,
+            audio_codes=audio_codes,
+            audio_lengths=mel_lengths,
+            cond_latents=cond_latents
+        )
+        
+        return outputs, outputs
+
+    model.train_step = types.MethodType(patched_train_step, model)
     # -------------------------------------------------------------------------
-    # (Rest of training code omitted for inspection)
-    # -------------------------------------------------------------------------
+
+    print("⏳ Loading data samples...")
+    train_samples = load_json_data(train_json)
+    eval_samples = load_json_data(eval_json)
+
+    trainer = Trainer(
+        TrainerArgs(restore_path=None, skip_train_epoch=False, start_with_eval=False),
+        config, output_path=OUT_PATH, model=model, train_samples=train_samples, eval_samples=eval_samples,   
+    )
+
+    print("🚀 Starting Training...")
+    trainer.fit()
 
 if __name__ == "__main__":
     main()
