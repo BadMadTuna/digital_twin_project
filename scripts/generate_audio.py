@@ -34,10 +34,11 @@ print("Loading model architecture...")
 config = XttsConfig()
 config.load_json(CONFIG_PATH)
 
-# 🛠️ CRITICAL FIX: Delete conflicting millisecond attributes from config.audio
+# --- FINAL FIX: Patch 1 (No Millisecond Configs) ---
+# We delete the millisecond attributes entirely from the Coqpit object 
+# to ensure AudioProcessor relies on the sample-based parameters.
 if hasattr(config.audio, 'frame_length_ms'): delattr(config.audio, 'frame_length_ms')
 if hasattr(config.audio, 'frame_shift_ms'): delattr(config.audio, 'frame_shift_ms')
-
 
 model = Xtts.init_from_config(config)
 
@@ -51,13 +52,15 @@ print("✅ Model weights loaded successfully.")
 model.to(device)
 model.eval()
 
-# 3. Initialize Audio Processor (Cleaned Configuration)
+# 3. Initialize Audio Processor (Explicit Arguments Fix)
 print("Initializing AudioProcessor...")
-# Convert to dict, filtering out all None values to prevent division errors
+
+# Get the cleaned dictionary after the deletions above
 audio_config_dict = {k: v for k, v in config.audio.to_dict().items() if v is not None}
 
+# Initialize with only the necessary, non-None parameters.
 ap = AudioProcessor(**audio_config_dict)
-ap.sample_rate = config.audio.sample_rate
+ap.sample_rate = config.audio.sample_rate 
 
 # 4. Generate Speaker Latent
 print("Generating speaker latent...")
@@ -72,6 +75,7 @@ try:
     
     with torch.no_grad():
         speaker_embedding = model.gpt.get_conditioning(mels)
+        # Global Average Pooling Fix
         gpt_cond_latent = speaker_embedding.mean(dim=2, keepdim=False).squeeze(0)
     
     # Prepare tensors for generation
