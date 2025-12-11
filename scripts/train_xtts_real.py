@@ -27,7 +27,8 @@ SPEAKER_NAME = "my_speaker"
 BATCH_SIZE = 2 
 EPOCHS = 10
 LEARNING_RATE = 5e-6
-SAVE_STEP = 1000
+# 🛠️ CRITICAL FIX: Ensure checkpoints are saved frequently
+SAVE_STEP = 1000 
 
 # -------------------------------------------------------------------------
 # DATA HELPERS
@@ -72,7 +73,7 @@ def download_dvae_if_missing(checkpoint_dir):
     if os.path.exists(dvae_path):
         return dvae_path
     
-    # We assume the download path is correct from previous steps
+    print("⚠️  dvae.pth missing. Downloading from Hugging Face...")
     url = "https://coqui.gateway.scarf.sh/hf-coqui/XTTS-v2/main/dvae.pth"
     try:
         r = requests.get(url, allow_redirects=True)
@@ -130,7 +131,7 @@ def resurrect_dvae(model, checkpoint_dir):
     if torch.cuda.is_available():
         dvae = dvae.cuda()
         
-    model.dvae = dvae
+    model.dvae = dvea
     return model.dvae
 
 # -------------------------------------------------------------------------
@@ -177,7 +178,7 @@ def main():
     if model.ap is None:
         model.ap = AudioProcessor(sample_rate=22050, num_mels=80, do_trim_silence=True, n_fft=1024, win_length=1024, hop_length=256)
 
-    # 🛠️ CONFIG STABILIZATION PATCH (Fixes the current crash)
+    # 🛠️ CONFIG STABILIZATION PATCH
     config.use_speaker_embedding = config.model_args.use_speaker_embedding
     config.use_language_embedding = config.model_args.use_language_embedding
     
@@ -214,7 +215,7 @@ def main():
     with torch.no_grad():
         feature_map = model.gpt.get_conditioning(mels) 
         
-        # Global Average Pooling [B, C, T] -> [B, C]
+        # Global Average Pooling: [B, C, T] -> [B, C]
         speaker_latent = feature_map.mean(dim=2, keepdim=False)
         
         # Ensure B=1 dimension is removed if B=1
@@ -227,7 +228,7 @@ def main():
     model.fixed_speaker_latent = speaker_latent
 
     # -------------------------------------------------------------------------
-    # 🛠️ PATCH 7: CUSTOM GPT TRAINING STEP (FINAL CLEANUP)
+    # 🛠️ PATCH 7 & 8: TRAINING AND EVALUATION STEPS
     # -------------------------------------------------------------------------
     def patched_train_step(self, batch, criterion=None):
         text_inputs = batch.get("text_input")
@@ -235,7 +236,7 @@ def main():
         mel_inputs = batch.get("mel_input")
         mel_lengths = batch.get("mel_lengths")
 
-        # 1. TRANSPOSE: [B, T, C] -> [B, C, T] for DVAE
+        # 1. TRANSPOSE: [B, T, C] -> [B, C, T]
         mel_inputs_transposed = mel_inputs.transpose(1, 2)
 
         # 2. Compute Codes
@@ -267,25 +268,26 @@ def main():
         
         return outputs, {"loss": total_loss, "loss_text": loss_text, "loss_mel": loss_mel}
 
-    # -------------------------------------------------------------------------
-    # 🛠️ PATCH 8: EVALUATION STEP FIX (Runs the patched train step without gradients)
-    # -------------------------------------------------------------------------
     def patched_eval_step(self, batch, criterion=None):
         with torch.no_grad():
-            # Call the already fixed train_step logic
             return self.train_step(batch, criterion)
 
     model.train_step = types.MethodType(patched_train_step, model)
     model.eval_step = types.MethodType(patched_eval_step, model)
-    
     # -------------------------------------------------------------------------
 
     print("⏳ Loading data samples...")
     train_samples = load_json_data(train_json)
     eval_samples = load_json_data(eval_json)
 
+    # 🛠️ CRITICAL FIX: Pass SAVE_STEP to TrainerArgs
     trainer = Trainer(
-        TrainerArgs(restore_path=None, skip_train_epoch=False, start_with_eval=False),
+        TrainerArgs(
+            restore_path=None, 
+            skip_train_epoch=False, 
+            start_with_eval=False,
+            save_step=SAVE_STEP # <-- FORCE PERIODIC SAVING
+        ),
         config, output_path=OUT_PATH, model=model, train_samples=train_samples, eval_samples=eval_samples,   
     )
 
@@ -293,4 +295,6 @@ def main():
     trainer.fit()
 
 if __name__ == "__main__":
+    # Note: This is an incomplete wrapper to provide the code, 
+    # the user must manually integrate the helper functions.
     main()
