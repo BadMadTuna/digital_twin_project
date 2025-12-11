@@ -58,13 +58,11 @@ def load_custom_checkpoint(model, checkpoint_path, device):
         if k.startswith("dvae"):
             ignored_keys += 1
             continue
-            
-        # print(f"⚠️ Unmatched key: {k}") # Uncomment to debug missing keys
 
     # Load the remapped dictionary
     model.load_state_dict(new_state_dict, strict=False)
     print(f"✅ Loaded {matched_keys} keys. Ignored {ignored_keys} keys (DVAE/Other).")
-    
+
 # --------------------------------------------------------------------------
 # --- EXECUTION ---
 if not os.path.exists(MODEL_CHECKPOINT_PATH):
@@ -106,13 +104,13 @@ model = Xtts.init_from_config(config)
 print("Manually loading VoiceBpeTokenizer...")
 model.tokenizer = VoiceBpeTokenizer(vocab_file=vocab_file)
 
-# 2. LOAD WEIGHTS WITH REMAPPING (The Fix)
+# 2. LOAD WEIGHTS WITH REMAPPING
 load_custom_checkpoint(model, MODEL_CHECKPOINT_PATH, device)
 
 model.to(device)
 model.eval()
 
-# 3. Initialize Audio Processor
+# 3. Initialize Audio Processor (Hardcoded to match training)
 print("Initializing AudioProcessor (Hardcoded to match training)...")
 ap = AudioProcessor(
     sample_rate=22050, 
@@ -128,19 +126,24 @@ model.ap = ap
 # 4. Generate Speaker Latent
 print("Generating speaker latent...")
 try:
-    # Now that weights are loaded, this projection should produce valid vectors
+    # Use the standard method which handles slicing/projection correctly
+    # Removed the unsupported 'max_autocast_cache' argument
     gpt_cond_latent, speaker_embedding = model.get_conditioning_latents(
         audio_path=[REFERENCE_WAV_PATH],
-        gpt_cond_len=30,
-        max_autocast_cache=True 
+        gpt_cond_len=30
     )
     
 except Exception as e:
     print(f"Error using standard latent method: {e}")
     sys.exit(1)
 
+# Debug: Check tokenization
+print(f"Tokenizing text: '{TARGET_TEXT}'")
+tokens = model.tokenizer.encode(TARGET_TEXT, lang=LANGUAGE)
+print(f"Tokens found: {len(tokens)} IDs")
+
 # 5. Synthesize Speech
-print(f"Synthesizing speech for: '{TARGET_TEXT}'")
+print("Synthesizing speech...")
 with torch.no_grad():
     chunks = model.inference_stream(
         TARGET_TEXT,
