@@ -202,11 +202,12 @@ def main():
     print(f"   Using reference: {ref_audio_path}")
     
     wav = model.ap.load_wav(ref_audio_path)
-    
-    # 1. Convert WAV to PyTorch Tensor [1, 1, T]
     wav_tensor = torch.FloatTensor(wav).unsqueeze(0).unsqueeze(0)
     
-    # 2. Convert PyTorch tensor to NumPy for melspectrogram call, then convert back to tensor
+    if torch.cuda.is_available():
+        wav_tensor = wav_tensor.cuda()
+
+    # 1. Compute Mels
     wav_numpy = wav_tensor.squeeze().cpu().numpy() 
     mels_numpy = model.ap.melspectrogram(wav_numpy)
     mels = torch.from_numpy(mels_numpy).unsqueeze(0)
@@ -214,12 +215,11 @@ def main():
     if torch.cuda.is_available():
         mels = mels.cuda()
         
-    # 3. Get the 512-dimensional conditioned latent
+    # 2. Get the 512-dimensional conditioned latent
     with torch.no_grad():
         feature_map = model.gpt.get_conditioning(mels) 
         
-        # 🛠️ FINAL DIMENSIONAL FIX: Pool feature map [B, C, T] -> [B, C]
-        # We average across the Time axis (dim 2)
+        # 🛠️ FINAL DIMENSIONAL FIX: Global Average Pooling
         speaker_latent = feature_map.mean(dim=2, keepdim=False)
         
         # Ensure B=1 dimension is removed if B=1
@@ -233,7 +233,7 @@ def main():
 
     # -------------------------------------------------------------------------
     # 🛠️ PATCH 7: CUSTOM GPT TRAINING STEP (FINAL CLEANUP)
-    #--------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     def patched_train_step(self, batch, criterion=None):
         text_inputs = batch.get("text_input")
         text_lengths = batch.get("text_lengths")
@@ -248,8 +248,6 @@ def main():
             audio_codes = self.dvae.get_codebook_indices(mel_inputs_transposed)
 
         # 3. Use Pre-computed Speaker Latent
-        # FINAL DIMENSION FIX: Unsqueeze and expand the 512/1024-dim latent to 3D for concatenation [B, 1, D]
-        # Note: self.fixed_speaker_latent is already [D] or [1, D].
         if self.fixed_speaker_latent.dim() == 1:
             latent_2d = self.fixed_speaker_latent.unsqueeze(0)
         else:
@@ -274,7 +272,17 @@ def main():
         
         return outputs, {"loss": total_loss, "loss_text": loss_text, "loss_mel": loss_mel}
 
+    # -------------------------------------------------------------------------
+    # 🛠️ PATCH 8: EVALUATION STEP FIX (Runs the patched train step without gradients)
+    # -------------------------------------------------------------------------
+    def patched_eval_step(self, batch, criterion=None):
+        with torch.no_grad():
+            # Call the already fixed train_step logic
+            return self.train_step(batch, criterion)
+
     model.train_step = types.MethodType(patched_train_step, model)
+    model.eval_step = types.MethodType(patched_eval_step, model)
+    
     # -------------------------------------------------------------------------
 
     print("⏳ Loading data samples...")
