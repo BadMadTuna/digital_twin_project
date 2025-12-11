@@ -33,40 +33,26 @@ config = XttsConfig()
 config.load_json(CONFIG_PATH)
 model = Xtts.init_from_config(config)
 
-# 2. Manual Checkpoint Loading and Filtering
-print(f"Loading and filtering weights from {MODEL_CHECKPOINT_PATH}...")
+# 2. Load Weights (Using manual load logic)
+print(f"Loading weights from {MODEL_CHECKPOINT_PATH}...")
 checkpoint = torch.load(MODEL_CHECKPOINT_PATH, map_location=device)
-
-# The generic Trainer wraps the model state in the 'model' key
 state_dict = checkpoint.get("model", checkpoint)
-
-# Filter out all 'dvae.' and 'gpt.gpt_inference' keys which are not in the instantiated Xtts object
-# We keep only the core GPT, ConditioningEncoder, and HifiGAN Decoder weights.
-filtered_state_dict = {}
-for k, v in state_dict.items():
-    if k.startswith("dvae.") or k.startswith("gpt.gpt_inference."):
-        # Ignore these keys—the DVAE is loaded from dvae.pth, and gpt_inference is not part of the core Xtts structure.
-        continue
-    # Rename keys to fit the instantiated Xtts model (e.g., gpt.mel_embedding -> gpt.mel_embedding)
-    # The keys look correct, so we mostly keep them, but we ensure the core GPT weights are correctly mapped.
-    
-    # Simple direct load, relying on strict=False to ignore the keys we don't care about (DVAE is the problem)
-    # Since our training script used the resurrected DVAE and separate patching, we load the full checkpoint weights
-    # into the model's submodules.
-    
-    filtered_state_dict[k] = v
-
-# Load the weights into the model, ignoring keys that do not match the instantiated architecture.
-# We set strict=False to ignore the unexpected DVAE and GPT_Inference keys.
-model.load_state_dict(filtered_state_dict, strict=False)
-
+model.load_state_dict(state_dict, strict=False)
 print("✅ Model weights loaded successfully.")
+
 model.to(device)
 model.eval()
 
-# 3. Initialize Audio Processor
-ap = AudioProcessor(**config.audio)
-ap.sample_rate = config.audio.sample_rate
+# 3. Initialize Audio Processor (The Final Fix)
+# We must clean the config dictionary to prevent NoneType division errors
+audio_config_dict = config.audio.to_dict()
+
+# Explicitly remove conflicting millisecond fields which default to None
+audio_config_dict.pop("frame_length_ms", None)
+audio_config_dict.pop("frame_shift_ms", None)
+
+ap = AudioProcessor(**audio_config_dict)
+ap.sample_rate = config.audio.sample_rate # Ensure sample rate is explicitly set
 
 # 4. Generate Speaker Latent
 print("Generating speaker latent...")
@@ -80,7 +66,6 @@ try:
     mels = torch.from_numpy(mels_numpy).unsqueeze(0).to(device)
     
     with torch.no_grad():
-        # Get the 512-dim embedding
         speaker_embedding = model.gpt.get_conditioning(mels)
         gpt_cond_latent = speaker_embedding.mean(dim=2, keepdim=False).squeeze(0)
     
