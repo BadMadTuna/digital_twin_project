@@ -233,13 +233,16 @@ def main():
         batch_size = text_inputs.shape[0]
         cond_latents = self.fixed_speaker_latent.expand(batch_size, -1)
 
-        # 4. Train GPT (Restored required 'wav_lengths')
+        # 4. Train GPT (Final Argument Combination)
+        # Note: We pass the calculated latent under BOTH possible names (cond_mels and cond_latents) 
+        # to ensure the internal code bypasses the bug on line 463 while using the right data.
         outputs = self.gpt(
             text_inputs=text_inputs,
             text_lengths=text_lengths,
             audio_codes=audio_codes,
-            cond_latents=cond_latents,
-            wav_lengths=mel_lengths  # <-- RESTORED
+            wav_lengths=mel_lengths, # We know this is required
+            cond_mels=cond_latents,    # FIX: Pass the latent here to satisfy the masking check (bug fix)
+            cond_latents=cond_latents  # Original argument that uses the data
         )
         return outputs, outputs
 
