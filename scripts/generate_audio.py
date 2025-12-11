@@ -5,7 +5,7 @@ import numpy as np
 from TTS.tts.configs.xtts_config import XttsConfig
 from TTS.tts.models.xtts import Xtts
 from TTS.utils.audio import AudioProcessor
-from TTS.utils.manage import ModelManager # <-- Need this to find the base model path
+from TTS.utils.manage import ModelManager # Retained for context
 
 # --------------------------------------------------------------------------
 # --- CONFIGURATION ---
@@ -27,12 +27,11 @@ if not os.path.exists(MODEL_CHECKPOINT_PATH):
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# 1. Determine Base Model Path (where tokenizer files are)
+# 1. Determine Base Model Path and Load Config
 manager = ModelManager()
 model_path_tuple = manager.download_model("tts_models/multilingual/multi-dataset/xtts_v2")
 BASE_MODEL_DIR = os.path.dirname(model_path_tuple[0])
 
-# 2. Load Model Config and Architecture
 print("Loading model architecture...")
 config = XttsConfig()
 config.load_json(CONFIG_PATH)
@@ -43,12 +42,11 @@ if hasattr(config.audio, 'frame_shift_ms'): delattr(config.audio, 'frame_shift_m
 
 model = Xtts.init_from_config(config)
 
-# 🛠️ TOKENIZER FIX: Manually initialize the tokenizer object using the base model directory
-if model.tokenizer:
-    print("Initializing XttsTokenizer...")
-    model.tokenizer.init_from_config(config, BASE_MODEL_DIR) # Pass the directory where vocab.json resides
-    
-# 3. Load Weights
+# 🛠️ TOKENIZER FIX: Run initialization directly to bypass crashing __len__ check
+print("Initializing XttsTokenizer...")
+model.tokenizer.init_from_config(config, BASE_MODEL_DIR)
+
+# 2. Load Weights
 print(f"Loading weights from {MODEL_CHECKPOINT_PATH}...")
 checkpoint = torch.load(MODEL_CHECKPOINT_PATH, map_location=device)
 state_dict = checkpoint.get("model", checkpoint)
@@ -58,27 +56,29 @@ print("✅ Model weights loaded successfully.")
 model.to(device)
 model.eval()
 
-# 4. Initialize Audio Processor (Stabilized Configuration)
+# 3. Initialize Audio Processor (Stabilized Configuration)
 print("Initializing AudioProcessor...")
 
+# Final robust parameter access
 SR = config.audio.sample_rate
 NFFT = getattr(config.audio, 'n_fft', getattr(config.audio, 'fft_size', 1024))
 WL = getattr(config.audio, 'win_length', NFFT)
 HL = getattr(config.audio, 'hop_length', getattr(config.audio, 'frame_shift', 256))
-NUM_MELS = getattr(config.audio, 'num_mels', 80)
 
+# Calculate the millisecond values to inject as non-None floats
 frame_length_ms = WL * 1000 / SR
 frame_shift_ms = HL * 1000 / SR
 
+# Prepare the dictionary
 audio_config_dict = {k: v for k, v in config.audio.to_dict().items() if v is not None}
-audio_config_dict["num_mels"] = NUM_MELS
+audio_config_dict["num_mels"] = getattr(config.audio, 'num_mels', 80)
 audio_config_dict["frame_length_ms"] = frame_length_ms
 audio_config_dict["frame_shift_ms"] = frame_shift_ms
 
 ap = AudioProcessor(**audio_config_dict)
 ap.sample_rate = config.audio.sample_rate
 
-# 5. Generate Speaker Latent
+# 4. Generate Speaker Latent
 print("Generating speaker latent...")
 try:
     reference_wav = ap.load_wav(REFERENCE_WAV_PATH, sr=ap.sample_rate)
@@ -99,7 +99,7 @@ except Exception as e:
     print(f"Fatal Error during latent generation: {e}")
     sys.exit(1)
 
-# 6. Synthesize Speech
+# 5. Synthesize Speech
 print(f"Synthesizing speech for: '{TARGET_TEXT}'")
 with torch.no_grad():
     chunks = model.inference_stream(
@@ -110,7 +110,7 @@ with torch.no_grad():
         enable_text_splitting=True,
     )
 
-# 7. Concatenate and Save
+# 6. Concatenate and Save
 wav_chunks = []
 for chunk in chunks:
     if chunk is not None:
