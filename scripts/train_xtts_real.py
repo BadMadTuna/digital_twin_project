@@ -187,7 +187,7 @@ def main():
     resurrect_dvae(model, CHECKPOINT_DIR)
 
     # -------------------------------------------------------------------------
-    # 🛠️ PRE-COMPUTE SPEAKER LATENT (FINAL DIMENSION FIX)
+    # 🛠️ PRE-COMPUTE SPEAKER LATENT (The "Constant Latent" Strategy)
     # -------------------------------------------------------------------------
     print("⏳ Pre-computing speaker latent from reference audio...")
     ref_audio_path = None
@@ -202,14 +202,19 @@ def main():
     print(f"   Using reference: {ref_audio_path}")
     
     wav = model.ap.load_wav(ref_audio_path)
+    
+    # 1. Convert WAV to PyTorch Tensor [1, 1, T]
     wav_tensor = torch.FloatTensor(wav).unsqueeze(0).unsqueeze(0)
     
-    if torch.cuda.is_available():
-        wav_tensor = wav_tensor.cuda()
-
-    # Get Mels [1, 80, T]
-    mels = model.ap.melspectrogram(wav_tensor).squeeze(0) # [80, T]
-    mels = mels.unsqueeze(0) # [1, 80, T]
+    # 2. Convert PyTorch tensor to NumPy for melspectrogram call, then convert back to tensor
+    # Ensure it's 1D for librosa: [T]
+    wav_numpy = wav_tensor.squeeze().cpu().numpy() 
+    
+    # Compute Mels (returns NumPy array [80, T])
+    mels_numpy = model.ap.melspectrogram(wav_numpy)
+    
+    # Convert back to tensor and add batch dim: [1, 80, T]
+    mels = torch.from_numpy(mels_numpy).unsqueeze(0)
     
     if torch.cuda.is_available():
         mels = mels.cuda()
@@ -224,7 +229,7 @@ def main():
     model.fixed_speaker_latent = speaker_latent
 
     # -------------------------------------------------------------------------
-    # 🛠️ PATCH 7: CUSTOM GPT TRAINING STEP (ULTIMATE FIX)
+    # 🛠️ PATCH 7: CUSTOM GPT TRAINING STEP (FINAL CLEANUP)
     # -------------------------------------------------------------------------
     def patched_train_step(self, batch, criterion=None):
         text_inputs = batch.get("text_input")
@@ -240,12 +245,11 @@ def main():
             audio_codes = self.dvae.get_codebook_indices(mel_inputs_transposed)
 
         # 3. Use Pre-computed Speaker Latent
-        # 🛠️ FINAL DIMENSION FIX: Unsqueeze and expand the 512-dim latent to 3D for concatenation [B, 1, D]
+        # FINAL DIMENSION FIX: Unsqueeze and expand the 512-dim latent to 3D for concatenation [B, 1, D]
         batch_size = text_inputs.shape[0]
         cond_latents_3d = self.fixed_speaker_latent.unsqueeze(1).expand(batch_size, -1, -1)
 
         # 4. Train GPT (Final Call)
-        # Note: We double-pass the 3D latent tensor to satisfy the masking bug and data input requirements.
         outputs = self.gpt(
             text_inputs=text_inputs,
             text_lengths=text_lengths,
