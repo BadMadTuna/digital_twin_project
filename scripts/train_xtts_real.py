@@ -20,9 +20,21 @@ print("⏳ Verifying model path...")
 manager = ModelManager()
 model_path_tuple = manager.download_model("tts_models/multilingual/multi-dataset/xtts_v2")
 
-# Tuple index 1 is the absolute path to 'config.json'. 
-# We use dirname() on that file to get the correct folder.
-CHECKPOINT_DIR = os.path.dirname(model_path_tuple[1])
+# Get the first item (the model path)
+model_path = model_path_tuple[0]
+print(f"🔍 DEBUG: Raw model path: {model_path}")
+
+# If it points to a file (e.g. model.pth), get the parent folder.
+# If it points to a folder, use it directly.
+if os.path.isfile(model_path):
+    CHECKPOINT_DIR = os.path.dirname(model_path)
+else:
+    CHECKPOINT_DIR = model_path
+
+if not os.path.exists(os.path.join(CHECKPOINT_DIR, "config.json")):
+    raise FileNotFoundError(f"❌ config.json not found in {CHECKPOINT_DIR}")
+
+print(f"✅ Found model directory at: {CHECKPOINT_DIR}")
 
 # Data Paths
 METADATA_CSV = "metadata.csv"
