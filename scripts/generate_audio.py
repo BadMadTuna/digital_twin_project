@@ -29,11 +29,27 @@ if not os.path.exists(MODEL_CHECKPOINT_PATH):
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# 1. Determine Base Model Path and Load Config
+# 1. Determine Base Model Path
 manager = ModelManager()
 model_path_tuple = manager.download_model("tts_models/multilingual/multi-dataset/xtts_v2")
 BASE_MODEL_DIR = os.path.dirname(model_path_tuple[0])
-VOCAB_FILE = os.path.join(BASE_MODEL_DIR, 'vocab.json') # We only need this one
+
+# 🛠️ ROBUST FILE FINDER: Find vocab.json or tokenizer.json automatically
+vocab_file = None
+for root, dirs, files in os.walk(BASE_MODEL_DIR):
+    if "vocab.json" in files:
+        vocab_file = os.path.join(root, "vocab.json")
+        break
+    if "tokenizer.json" in files: # fallback name
+        vocab_file = os.path.join(root, "tokenizer.json")
+        break
+
+if not vocab_file:
+    print(f"❌ Error: Could not find vocab.json in {BASE_MODEL_DIR}")
+    print("Files found:", os.listdir(BASE_MODEL_DIR))
+    sys.exit(1)
+
+print(f"✅ Found vocab file at: {vocab_file}")
 
 print("Loading model architecture...")
 config = XttsConfig()
@@ -45,9 +61,9 @@ if hasattr(config.audio, 'frame_shift_ms'): delattr(config.audio, 'frame_shift_m
 
 model = Xtts.init_from_config(config)
 
-# 🛠️ TOKENIZER FIX: Correctly instantiate with only the vocab_file argument
+# 🛠️ TOKENIZER FIX: Manually instantiate using the found file
 print("Manually loading VoiceBpeTokenizer...")
-model.tokenizer = VoiceBpeTokenizer(vocab_file=VOCAB_FILE)
+model.tokenizer = VoiceBpeTokenizer(vocab_file=vocab_file)
 
 # 2. Load Weights
 print(f"Loading weights from {MODEL_CHECKPOINT_PATH}...")
@@ -63,7 +79,6 @@ model.eval()
 print("Initializing AudioProcessor...")
 
 SR = config.audio.sample_rate
-# Robust parameter access with fallbacks
 NFFT = getattr(config.audio, 'n_fft', getattr(config.audio, 'fft_size', 1024))
 WL = getattr(config.audio, 'win_length', NFFT)
 HL = getattr(config.audio, 'hop_length', getattr(config.audio, 'frame_shift', 256))
@@ -94,6 +109,7 @@ try:
     
     with torch.no_grad():
         speaker_embedding = model.gpt.get_conditioning(mels)
+        # Global Average Pooling Fix
         gpt_cond_latent = speaker_embedding.mean(dim=2, keepdim=False).squeeze(0)
     
     gpt_cond_latent = gpt_cond_latent.unsqueeze(0)
