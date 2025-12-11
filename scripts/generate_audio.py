@@ -7,8 +7,8 @@ from TTS.utils.audio import AudioProcessor
 
 # --- CONFIGURATION ---
 # 1. Update this path to point to your final checkpoint directory
-MODEL_DIR = "/home/ubuntu/digital_twin_project/models/xtts_finetuned-December-11-2025_12+38PM-e747b29"
-MODEL_CHECKPOINT_PATH = os.path.join(MODEL_DIR, "best_model.pth")
+MODEL_DIR = "/home/ubuntu/digital_twin_project/models/xtts_finetuned-December-11-2025_01+15PM-3e81100"
+MODEL_CHECKPOINT_PATH = os.path.join(MODEL_DIR, "checkpoint_3070.pth")
 CONFIG_PATH = os.path.join(MODEL_DIR, "config.json")
 REFERENCE_WAV_PATH = "audio_data/dataset/wavs/segment_0330.wav" # Use the same reference audio
 OUTPUT_WAV_PATH = "output_test_voice.wav"
