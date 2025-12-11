@@ -219,9 +219,11 @@ def main():
         feature_map = model.gpt.get_conditioning(mels) 
         
         # 🛠️ FINAL DIMENSIONAL FIX: Pool feature map [1, 1, C, T] -> [1, C]
-        # We average across the last two dimensions (C and T) and squeeze the singleton dimensions (B and S)
-        # We also use keepdim=False in mean to force the reduction.
-        speaker_latent = feature_map.mean(dim=[-2, -1], keepdim=False).squeeze(1) 
+        # We average across the last two dimensions (C and T) and remove the singleton batch dim (0).
+        # We also remove the sequence dimension (1) which is size 1.
+        
+        # Correct averaging and final squeeze
+        speaker_latent = feature_map.mean(dim=[1, 3], keepdim=False).squeeze(0)
         
         print(f"✅ Speaker Latent Computed: {speaker_latent.shape}")
         
@@ -247,8 +249,13 @@ def main():
         # 3. Use Pre-computed Speaker Latent
         # FINAL DIMENSION FIX: Unsqueeze and expand the 512/1024-dim latent to 3D for concatenation [B, 1, D]
         batch_size = text_inputs.shape[0]
-        # We assume self.fixed_speaker_latent is [1, D]
-        cond_latents_3d = self.fixed_speaker_latent.unsqueeze(1).expand(batch_size, -1, -1)
+        # self.fixed_speaker_latent is [D] or [1, D]. We ensure [1, D] then unsqueeze(1)
+        if self.fixed_speaker_latent.dim() == 1:
+            latent_2d = self.fixed_speaker_latent.unsqueeze(0)
+        else:
+            latent_2d = self.fixed_speaker_latent
+            
+        cond_latents_3d = latent_2d.unsqueeze(1).expand(batch_size, -1, -1)
 
         # 4. Train GPT (Final Call)
         outputs = self.gpt(
