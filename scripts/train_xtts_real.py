@@ -1,153 +1,146 @@
 import os
 import csv
 import json
-import torch
+import random
 from trainer import Trainer, TrainerArgs
+from TTS.tts.configs.shared_configs import BaseDatasetConfig
 from TTS.tts.configs.xtts_config import XttsConfig
 from TTS.tts.models.xtts import Xtts
-from TTS.utils.manage import ModelManager
+from TTS.tts.datasets.formatters import *
 
-# ==========================================================
-# === CONFIGURATION ===
-# ==========================================================
-PROJECT_ROOT = os.getcwd()
-DATASET_PATH = os.path.join(PROJECT_ROOT, "audio_data/dataset")
-WAVS_PATH = os.path.join(DATASET_PATH, "wavs")
-METADATA_FILE = os.path.join(DATASET_PATH, "metadata.csv")
-OUTPUT_PATH = os.path.join(PROJECT_ROOT, "models/xtts_finetuned")
+# -------------------------------------------------------------------------
+# CONFIGURATION & PATHS
+# -------------------------------------------------------------------------
+RUN_NAME = "xtts_finetuned"
+OUT_PATH = os.path.join(os.getcwd(), "models")  # Saves to models/xtts_finetuned
+CHECKPOINT_DIR = "tts_models/multilingual/multi-dataset/xtts_v2"  # Base model path
 
-# XTTS Training Params
-EPOCHS = 10           # XTTS learns extremely fast. 6-10 is usually enough.
-BATCH_SIZE = 4        # Keep low to avoid OOM
-GRAD_ACC = 1          # Gradient accumulation
-LR = 5e-6             # Very low learning rate is mandatory for XTTS
-# ==========================================================
+# Data Paths
+METADATA_CSV = "metadata.csv"
+WAVS_DIR = "wavs"  # Assuming your audio files are in a 'wavs' subfolder
+LANGUAGE = "en"
+SPEAKER_NAME = "my_speaker"
 
-os.environ["COQUI_TOS_AGREED"] = "1"
+# Training Hyperparameters
+BATCH_SIZE = 4  # Lower if you get OutOfMemory errors (try 2)
+EPOCHS = 10
+LEARNING_RATE = 5e-6
 
-def format_dataset():
+# -------------------------------------------------------------------------
+# HELPER: CONVERT CSV TO XTTS JSON
+# -------------------------------------------------------------------------
+def format_dataset(csv_file, train_json, eval_json):
     """
-    Converts your VITS metadata.csv to the JSON format XTTS requires.
+    Reads metadata.csv (audio_file|text) and converts it to 
+    XTTS-compatible JSONL format (train.json and eval.json).
     """
+    if not os.path.exists(csv_file):
+        raise FileNotFoundError(f"❌ Could not find {csv_file}")
+
     print("Converting metadata.csv to XTTS JSON format...")
-    train_json_path = os.path.join(PROJECT_ROOT, "xtts_train.json")
-    eval_json_path = os.path.join(PROJECT_ROOT, "xtts_eval.json")
-
-    data = []
     
-    # Check if metadata exists
-    if not os.path.exists(METADATA_FILE):
-        print(f"❌ Error: {METADATA_FILE} not found.")
-        return None, None
-
-    # Read Metadata
-    with open(METADATA_FILE, "r", encoding="utf-8") as f:
-        # Detect delimiter
-        line = f.readline()
-        f.seek(0)
-        delimiter = "|" if "|" in line else ","
-        
-        reader = csv.reader(f, delimiter=delimiter)
+    items = []
+    with open(csv_file, 'r', encoding='utf-8') as f:
+        reader = csv.reader(f, delimiter='|')
         for row in reader:
             if len(row) < 2: continue
+            audio_name = row[0].strip()
+            text = row[1].strip()
             
-            filename = row[0].strip()
-            text = delimiter.join(row[1:]).strip()
+            # Ensure audio path is correct
+            audio_path = os.path.join(WAVS_DIR, audio_name)
             
-            # Resolve Path
-            full_wav_path = os.path.join(WAVS_PATH, filename)
-            if not os.path.exists(full_wav_path):
-                # Try root
-                full_wav_path = os.path.join(DATASET_PATH, filename)
+            # Create XTTS entry
+            items.append({
+                "text": text,
+                "audio_file": audio_path,
+                "speaker_name": SPEAKER_NAME,
+                "language": LANGUAGE
+            })
+
+    # Shuffle and Split (90% train, 10% eval)
+    random.shuffle(items)
+    split_idx = int(len(items) * 0.9)
+    train_items = items[:split_idx]
+    eval_items = items[split_idx:]
+
+    # Write JSONL files
+    with open(train_json, "w", encoding="utf-8") as f:
+        for item in train_items:
+            f.write(json.dumps(item) + "\n")
             
-            if os.path.exists(full_wav_path):
-                # XTTS JSON Format
-                data.append({
-                    "audio_file": full_wav_path,
-                    "text": text,
-                    "speaker_name": "my_voice",
-                    "language": "en"
-                })
+    with open(eval_json, "w", encoding="utf-8") as f:
+        for item in eval_items:
+            f.write(json.dumps(item) + "\n")
 
-    # Split Train/Eval (90/10)
-    split_idx = int(len(data) * 0.9)
-    train_data = data[:split_idx]
-    eval_data = data[split_idx:]
+    print(f"✅ Created {len(train_items)} training samples and {len(eval_items)} eval samples.")
 
-    # Save JSONs
-    with open(train_json_path, "w", encoding="utf-8") as f:
-        json.dump(train_data, f, indent=4)
-    
-    with open(eval_json_path, "w", encoding="utf-8") as f:
-        json.dump(eval_data, f, indent=4)
-        
-    print(f"✅ Created {len(train_data)} training samples and {len(eval_data)} eval samples.")
-    return train_json_path, eval_json_path
-
+# -------------------------------------------------------------------------
+# MAIN TRAINING ROUTINE
+# -------------------------------------------------------------------------
 def main():
-    # 1. Prepare Data
-    train_json, eval_json = format_dataset()
-    if not train_json: return
+    # 1. Prepare Data Files
+    train_json = "metadata_train.json"
+    eval_json = "metadata_eval.json"
+    format_dataset(METADATA_CSV, train_json, eval_json)
 
-    # 2. Download Base Model
-    print("⬇️  Loading XTTS v2 Base Model...")
-    ModelManager().download_model("tts_models/multilingual/multi-dataset/xtts_v2")
-    checkpoint_dir = os.path.join(os.path.expanduser("~/.local/share/tts"), "tts_models--multilingual--multi-dataset--xtts_v2")
-    
-    # If the standard download path differs, find it dynamically
-    if not os.path.exists(checkpoint_dir):
-        # Fallback search
-        import glob
-        possible = glob.glob(os.path.expanduser("~/.local/share/tts/tts_models--multilingual--multi-dataset--xtts_v2"))
-        if possible: checkpoint_dir = possible[0]
-        else:
-             # Last resort: let the config downloader handle it, but define paths manually if needed
-             pass
-
-    # 3. Configure XTTS
+    # 2. Define Model Configuration
     config = XttsConfig()
-    config.load_json(os.path.join(checkpoint_dir, "config.json"))
+    
+    # Load defaults from the downloaded base model
+    config.load_json(os.path.join(CHECKPOINT_DIR, "config.json"))
 
-    # Override for Fine-Tuning
-    config.epochs = EPOCHS
+    # Update config for fine-tuning
+    config.dataset_config.datasets = [
+        BaseDatasetConfig(
+            formatter="xtts",  # Uses the internal XTTS formatter
+            meta_file_train=train_json,
+            meta_file_val=eval_json,
+            path=os.getcwd(),
+            language=LANGUAGE
+        )
+    ]
+
     config.batch_size = BATCH_SIZE
-    config.grad_accum_steps = GRAD_ACC
-    config.lr = LR
-    config.optimizer = "AdamW"
-    config.save_step = 500
-    config.output_path = OUTPUT_PATH
+    config.epochs = EPOCHS
+    config.lr = LEARNING_RATE
+    config.test_batch_size = 1
     
-    # IMPORTANT: Point to our custom JSONs
-    config.train_datasets = [
-        {"name": "custom", "path": "", "meta_file_train": train_json, "language": "en"}
-    ]
-    config.eval_datasets = [
-        {"name": "custom", "path": "", "meta_file_val": eval_json, "language": "en"}
-    ]
+    # Paths for saving results
+    config.output_path = OUT_PATH
+    config.run_name = RUN_NAME
 
-    # 4. Initialize Model
+    # 3. Load the Model
+    print("⬇️  Loading XTTS v2 Base Model...")
     model = Xtts.init_from_config(config)
-    model.load_checkpoint(config, checkpoint_dir=checkpoint_dir, eval=True)
+    model.load_checkpoint(config, checkpoint_dir=CHECKPOINT_DIR, eval=True)
 
-    # 5. Initialize GPT Trainer
-    # NOTE: XTTS uses a specialized training routine often, but the Trainer class 
-    # in newer Coqui versions handles the "GPT" vs "VITS" switch internally based on config.
-    # If this fails, we switch to the explicit GPTTrainer import.
-    
-    from trainer import Trainer, TrainerArgs
-    
+    # =========================================================================
+    # 🛠️ CRITICAL FIX: MONKEY-PATCH get_criterion
+    # The generic Trainer expects this method, but XTTS calculates loss internally.
+    # We add a dummy lambda function to prevent the AttributeError.
+    # =========================================================================
+    model.get_criterion = lambda: None
+
+    if torch.cuda.is_available():
+        model.cuda()
+
+    # 4. Initialize Trainer
     trainer = Trainer(
-        TrainerArgs(),
+        TrainerArgs(
+            restore_path=None, # We manually loaded checkpoint above
+            skip_train_epoch=False,
+            start_with_eval=False,
+        ),
         config,
-        output_path=OUTPUT_PATH,
+        output_path=OUT_PATH,
         model=model,
-        train_samples=None, # XTTS loader handles this via config.train_datasets
-        eval_samples=None,
+        train_samples=None, # Auto-loaded by config
+        eval_samples=None,  # Auto-loaded by config
     )
 
-    print("🚀 Starting XTTS Fine-Tuning...")
-    # XTTS fine-tuning is quirky. It ignores 'train_samples' arg in the trainer 
-    # and re-loads from the config JSONs internally.
+    # 5. Start Training
+    print("🚀 Starting Training...")
     trainer.fit()
 
 if __name__ == "__main__":
