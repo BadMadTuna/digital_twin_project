@@ -31,7 +31,6 @@ LEARNING_RATE = 5e-6
 # -------------------------------------------------------------------------
 def format_dataset(csv_file, train_json, eval_json):
     if not os.path.exists(csv_file): raise FileNotFoundError(f"❌ Could not find {csv_file}")
-    print("Converting metadata.csv to XTTS JSON format...")
     items = []
     with open(csv_file, 'r', encoding='utf-8') as f:
         reader = csv.reader(f, delimiter='|')
@@ -67,36 +66,39 @@ def load_json_data(json_file):
 def resurrect_dvae(model, checkpoint_dir):
     print("✨ Attempting to resurrect missing VQGAN/DVAE...")
     
-    # 🛠️ FIX: Use the specific path found by the pathfinder script
+    # 1. Import Class
     try:
         from TTS.tts.layers.xtts.dvae import DiscreteVAE
     except ImportError as e:
         print(f"❌ Could not import DiscreteVAE: {e}")
         sys.exit(1)
 
-    # Instantiate DVAE with standard XTTS v2 settings
+    # 2. Instantiate DVAE
     dvae = DiscreteVAE(
-        channels=80, 
-        normalization=None, 
-        positional_dims=1, 
-        num_tokens=1024, 
-        codebook_dim=512, 
-        hidden_dim=512, 
-        num_resnet_blocks=3, 
-        kernel_size=3, 
-        num_layers=2
+        channels=80, normalization=None, positional_dims=1, num_tokens=1024, 
+        codebook_dim=512, hidden_dim=512, num_resnet_blocks=3, kernel_size=3, num_layers=2
     )
     
-    # Load weights
+    # 3. Load Weights
     model_path = os.path.join(checkpoint_dir, "model.pth")
     print(f"   Loading weights from {model_path}...")
     full_state_dict = torch.load(model_path, map_location="cpu")
     
-    # Filter for 'dvae.' keys
+    # 🛠️ STRATEGY 1: Look for 'dvae.' prefix
     dvae_state_dict = {k.replace("dvae.", ""): v for k, v in full_state_dict.items() if k.startswith("dvae.")}
-            
+    
+    # 🛠️ STRATEGY 2: Look for 'hifigan_decoder.vqgan.' prefix
     if not dvae_state_dict:
-        print("❌ No 'dvae.' keys found in checkpoint.")
+        print("   'dvae.' prefix not found. Trying 'hifigan_decoder.vqgan.'...")
+        dvae_state_dict = {k.replace("hifigan_decoder.vqgan.", ""): v for k, v in full_state_dict.items() if k.startswith("hifigan_decoder.vqgan.")}
+
+    # 🛠️ FAILURE MODE: Print keys to debug
+    if not dvae_state_dict:
+        print("❌ VQGAN weights not found in checkpoint!")
+        print("   Dumping first 20 keys in checkpoint for inspection:")
+        for i, key in enumerate(full_state_dict.keys()):
+            if i > 20: break
+            print(f"   - {key}")
         sys.exit(1)
         
     dvae.load_state_dict(dvae_state_dict)
@@ -134,7 +136,7 @@ def main():
     model.load_checkpoint(config, checkpoint_dir=CHECKPOINT_DIR, eval=True)
     if torch.cuda.is_available(): model.cuda()
 
-    # --- PATCHES ---
+    # --- COMPATIBILITY PATCHES ---
     model.get_criterion = lambda: None
     if model.speaker_manager:
         model.speaker_manager.save_ids_to_file = lambda x: None
@@ -152,7 +154,7 @@ def main():
     if model.ap is None:
         model.ap = AudioProcessor(sample_rate=22050, num_mels=80, do_trim_silence=True, n_fft=1024, win_length=1024, hop_length=256)
 
-    # 🛠️ RESURRECT DVAE (Using corrected path)
+    # 🛠️ RESURRECT DVAE (With improved key search)
     resurrect_dvae(model, CHECKPOINT_DIR)
 
     # -------------------------------------------------------------------------
@@ -167,7 +169,7 @@ def main():
         # Compute Codes
         with torch.no_grad():
             _, _, info = self.dvae.encode(mel_inputs)
-            audio_codes = info[2] # [B, T]
+            audio_codes = info[2] 
 
         # Compute Latents
         with torch.no_grad():
@@ -184,7 +186,6 @@ def main():
             audio_lengths=mel_lengths,
             cond_latents=cond_latents
         )
-        
         return outputs, outputs
 
     model.train_step = types.MethodType(patched_train_step, model)
