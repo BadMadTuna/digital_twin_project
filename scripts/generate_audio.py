@@ -33,7 +33,7 @@ config = XttsConfig()
 config.load_json(CONFIG_PATH)
 model = Xtts.init_from_config(config)
 
-# 2. Load Weights (Using manual load logic)
+# 2. Load Weights
 print(f"Loading weights from {MODEL_CHECKPOINT_PATH}...")
 checkpoint = torch.load(MODEL_CHECKPOINT_PATH, map_location=device)
 state_dict = checkpoint.get("model", checkpoint)
@@ -43,16 +43,13 @@ print("✅ Model weights loaded successfully.")
 model.to(device)
 model.eval()
 
-# 3. Initialize Audio Processor (The Final Fix)
-# We must clean the config dictionary to prevent NoneType division errors
-audio_config_dict = config.audio.to_dict()
-
-# Explicitly remove conflicting millisecond fields which default to None
-audio_config_dict.pop("frame_length_ms", None)
-audio_config_dict.pop("frame_shift_ms", None)
+# 3. Initialize Audio Processor (The Final Stabilization Fix)
+print("Initializing AudioProcessor...")
+# CRITICAL FIX: Filter out all None values to prevent division by None error
+audio_config_dict = {k: v for k, v in config.audio.to_dict().items() if v is not None}
 
 ap = AudioProcessor(**audio_config_dict)
-ap.sample_rate = config.audio.sample_rate # Ensure sample rate is explicitly set
+ap.sample_rate = config.audio.sample_rate
 
 # 4. Generate Speaker Latent
 print("Generating speaker latent...")
@@ -67,6 +64,7 @@ try:
     
     with torch.no_grad():
         speaker_embedding = model.gpt.get_conditioning(mels)
+        # Average over time axis (dim 2) and remove singleton batch dim (dim 1)
         gpt_cond_latent = speaker_embedding.mean(dim=2, keepdim=False).squeeze(0)
     
     # Prepare tensors for generation
