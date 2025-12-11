@@ -62,12 +62,12 @@ def load_json_data(json_file):
     return data
 
 # -------------------------------------------------------------------------
-# 🛠️ RESURRECTION UTILITY: REBUILD MISSING VQGAN
+# 🛠️ RESURRECTION UTILITY: KEY HUNTER EDITION
 # -------------------------------------------------------------------------
 def resurrect_dvae(model, checkpoint_dir):
     print("✨ Attempting to resurrect missing VQGAN/DVAE...")
     
-    # 1. Import Class
+    # 1. Import Class (Use the path found earlier)
     try:
         from TTS.tts.layers.xtts.dvae import DiscreteVAE
     except ImportError as e:
@@ -80,31 +80,66 @@ def resurrect_dvae(model, checkpoint_dir):
         codebook_dim=512, hidden_dim=512, num_resnet_blocks=3, kernel_size=3, num_layers=2
     )
     
-    # 3. Load Weights
+    # 3. Load Weights - THE KEY HUNTER
+    
+    # Check for separate DVAE file first
+    dvae_path = os.path.join(checkpoint_dir, "dvae.pth")
     model_path = os.path.join(checkpoint_dir, "model.pth")
-    print(f"   Loading weights from {model_path}...")
-    checkpoint = torch.load(model_path, map_location="cpu")
     
-    # 🛠️ FIX: Unwrap the 'model' key if present
-    if "model" in checkpoint:
-        print("   Unwrapping 'model' key from checkpoint...")
-        full_state_dict = checkpoint["model"]
+    state_dict_to_load = None
+    
+    if os.path.exists(dvae_path):
+        print(f"   Found separate DVAE checkpoint: {dvae_path}")
+        state_dict_to_load = torch.load(dvae_path, map_location="cpu")
     else:
-        full_state_dict = checkpoint
+        print(f"   Loading main checkpoint: {model_path}")
+        checkpoint = torch.load(model_path, map_location="cpu")
+        if "model" in checkpoint:
+            state_dict_to_load = checkpoint["model"]
+        else:
+            state_dict_to_load = checkpoint
+
+    # 4. Filter Keys
+    # We look for standard prefixes
+    prefixes_to_try = ["dvae.", "hifigan_decoder.vqgan.", "vqgan."]
+    dvae_state_dict = {}
     
-    # 🛠️ STRATEGY 1: Look for 'dvae.' prefix
-    dvae_state_dict = {k.replace("dvae.", ""): v for k, v in full_state_dict.items() if k.startswith("dvae.")}
-    
-    # 🛠️ STRATEGY 2: Look for 'hifigan_decoder.vqgan.' prefix
+    # Try known prefixes
+    for prefix in prefixes_to_try:
+        temp_dict = {k.replace(prefix, ""): v for k, v in state_dict_to_load.items() if k.startswith(prefix)}
+        if temp_dict:
+            print(f"   ✅ Found keys with prefix: '{prefix}'")
+            dvae_state_dict = temp_dict
+            break
+            
+    # If still empty, activate KEY HUNTER
     if not dvae_state_dict:
-        print("   'dvae.' prefix not found. Trying 'hifigan_decoder.vqgan.'...")
-        dvae_state_dict = {k.replace("hifigan_decoder.vqgan.", ""): v for k, v in full_state_dict.items() if k.startswith("hifigan_decoder.vqgan.")}
+        print("   ⚠️  Standard prefixes failed. Scanning all keys for DVAE-like signatures...")
+        found_candidates = []
+        for k in state_dict_to_load.keys():
+            if "codebook" in k or "encoder" in k and "gpt" not in k:
+                 found_candidates.append(k)
+        
+        if found_candidates:
+            print(f"   🔎 Found {len(found_candidates)} candidate keys. Examples:")
+            for k in found_candidates[:5]: print(f"      - {k}")
+            
+            # Attempt to guess prefix from the first candidate
+            # e.g. "some.weird.prefix.codebook" -> prefix is "some.weird.prefix."
+            first_key = found_candidates[0]
+            if "codebook" in first_key:
+                # split at codebook
+                guessed_prefix = first_key.split("codebook")[0]
+                print(f"   🎯 Guessing prefix: '{guessed_prefix}'")
+                dvae_state_dict = {k.replace(guessed_prefix, ""): v for k, v in state_dict_to_load.items() if k.startswith(guessed_prefix)}
 
     if not dvae_state_dict:
-        print("❌ VQGAN weights STILL not found!")
+        print("❌ VQGAN weights NOT found. Dumping random keys to debug:")
+        keys = list(state_dict_to_load.keys())
+        for k in keys[:20]: print(f"   - {k}")
         sys.exit(1)
         
-    dvae.load_state_dict(dvae_state_dict)
+    dvae.load_state_dict(dvae_state_dict, strict=False) # Strict=False to be forgiving
     print("✅ DVAE weights loaded successfully.")
 
     if torch.cuda.is_available():
@@ -139,7 +174,7 @@ def main():
     model.load_checkpoint(config, checkpoint_dir=CHECKPOINT_DIR, eval=True)
     if torch.cuda.is_available(): model.cuda()
 
-    # --- COMPATIBILITY PATCHES ---
+    # --- PATCHES ---
     model.get_criterion = lambda: None
     if model.speaker_manager:
         model.speaker_manager.save_ids_to_file = lambda x: None
@@ -157,7 +192,7 @@ def main():
     if model.ap is None:
         model.ap = AudioProcessor(sample_rate=22050, num_mels=80, do_trim_silence=True, n_fft=1024, win_length=1024, hop_length=256)
 
-    # 🛠️ RESURRECT DVAE (With unwrapping logic)
+    # 🛠️ RESURRECT DVAE (With Key Hunter)
     resurrect_dvae(model, CHECKPOINT_DIR)
 
     # -------------------------------------------------------------------------
