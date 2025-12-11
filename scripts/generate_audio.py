@@ -8,9 +8,7 @@ from TTS.utils.audio import AudioProcessor
 
 # --------------------------------------------------------------------------
 # --- CONFIGURATION ---
-# Target the directory from your last successful run
 MODEL_DIR = "/home/ubuntu/digital_twin_project/models/xtts_finetuned-December-11-2025_01+15PM-3e81100"
-# Use the checkpoint you verified exists
 MODEL_CHECKPOINT_NAME = "checkpoint_3070.pth" 
 MODEL_CHECKPOINT_PATH = os.path.join(MODEL_DIR, MODEL_CHECKPOINT_NAME)
 CONFIG_PATH = os.path.join(MODEL_DIR, "config.json")
@@ -34,16 +32,16 @@ print("Loading model architecture...")
 config = XttsConfig()
 config.load_json(CONFIG_PATH)
 
-# --- FINAL FIX: Patch 1 (Injecting Calculated Millisecond Values) ---
-# Calculate the sample-to-millisecond values based on fixed parameters
+# --- FINAL FIX: Retrieve parameters robustly ---
 SR = config.audio.sample_rate
-WL = config.audio.win_length
+NFFT = config.audio.n_fft
+# 🛠️ FIX: Use getattr with n_fft as the fallback default for win_length
+WL = getattr(config.audio, 'win_length', NFFT)
 HL = config.audio.hop_length
+NUM_MELS = config.audio.num_mels
 
-frame_length_ms = WL * 1000 / SR
-frame_shift_ms = HL * 1000 / SR
 
-# 🛠️ CRITICAL FIX: Delete the original None attributes and replace with calculated floats
+# 🛠️ CRITICAL FIX: Delete conflicting millisecond attributes to prevent NoneType error
 if hasattr(config.audio, 'frame_length_ms'): delattr(config.audio, 'frame_length_ms')
 if hasattr(config.audio, 'frame_shift_ms'): delattr(config.audio, 'frame_shift_ms')
 
@@ -62,8 +60,15 @@ model.eval()
 
 # 3. Initialize Audio Processor (Stabilized Configuration)
 print("Initializing AudioProcessor...")
-# Convert to dict, filtering out all None values that might linger
-audio_config_dict = {k: v for k, v in config.audio.to_dict().items() if v is not None}
+
+# Calculate the millisecond values to inject as non-None floats
+frame_length_ms = WL * 1000 / SR
+frame_shift_ms = HL * 1000 / SR
+
+# Prepare the dictionary for AudioProcessor, ensuring required values are present
+audio_config_dict = {
+    k: v for k, v in config.audio.to_dict().items() if v is not None
+}
 
 # Inject the calculated, non-None millisecond values
 audio_config_dict["frame_length_ms"] = frame_length_ms
