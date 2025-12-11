@@ -71,7 +71,7 @@ def download_dvae_if_missing(checkpoint_dir):
     if os.path.exists(dvae_path):
         return dvae_path
     
-    print("⚠️  dvae.pth missing. Downloading from Hugging Face...")
+    # We assume the download path is correct from previous steps
     url = "https://coqui.gateway.scarf.sh/hf-coqui/XTTS-v2/main/dvae.pth"
     try:
         r = requests.get(url, allow_redirects=True)
@@ -79,15 +79,8 @@ def download_dvae_if_missing(checkpoint_dir):
             f.write(r.content)
         print("✅ dvae.pth downloaded successfully.")
     except Exception as e:
-        print(f"❌ Failed to download dvae.pth: {e}")
-        try:
-             url_backup = "https://huggingface.co/coqui/XTTS-v2/resolve/main/dvae.pth"
-             r = requests.get(url_backup, allow_redirects=True)
-             with open(dvae_path, 'wb') as f:
-                f.write(r.content)
-             print("✅ dvae.pth downloaded successfully (backup).")
-        except:
-             sys.exit("Could not download dvae.pth. Please download it manually.")
+        sys.exit(f"❌ Failed to download dvae.pth: {e}")
+             
     return dvae_path
 
 # -------------------------------------------------------------------------
@@ -183,6 +176,10 @@ def main():
     if model.ap is None:
         model.ap = AudioProcessor(sample_rate=22050, num_mels=80, do_trim_silence=True, n_fft=1024, win_length=1024, hop_length=256)
 
+    # 🛠️ CONFIG STABILIZATION PATCH (Fixes the current crash)
+    config.use_speaker_embedding = config.model_args.use_speaker_embedding
+    config.use_language_embedding = config.model_args.use_language_embedding
+    
     # 🛠️ RESURRECT DVAE
     resurrect_dvae(model, CHECKPOINT_DIR)
 
@@ -204,9 +201,6 @@ def main():
     wav = model.ap.load_wav(ref_audio_path)
     wav_tensor = torch.FloatTensor(wav).unsqueeze(0).unsqueeze(0)
     
-    if torch.cuda.is_available():
-        wav_tensor = wav_tensor.cuda()
-
     # 1. Compute Mels
     wav_numpy = wav_tensor.squeeze().cpu().numpy() 
     mels_numpy = model.ap.melspectrogram(wav_numpy)
@@ -219,7 +213,7 @@ def main():
     with torch.no_grad():
         feature_map = model.gpt.get_conditioning(mels) 
         
-        # 🛠️ FINAL DIMENSIONAL FIX: Global Average Pooling
+        # Global Average Pooling [B, C, T] -> [B, C]
         speaker_latent = feature_map.mean(dim=2, keepdim=False)
         
         # Ensure B=1 dimension is removed if B=1
