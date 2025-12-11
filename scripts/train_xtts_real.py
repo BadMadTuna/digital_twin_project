@@ -131,6 +131,9 @@ def main():
     config.model_args.use_d_vector_file = False
     config.model_args.use_language_embedding = False
 
+    if model.tokenizer is not None:
+        model.tokenizer.use_phonemes = False
+
     config.batch_size = BATCH_SIZE
     config.epochs = EPOCHS
     config.lr = LEARNING_RATE
