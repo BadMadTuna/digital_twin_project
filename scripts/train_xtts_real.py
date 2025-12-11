@@ -190,7 +190,6 @@ def main():
     # 🛠️ PRE-COMPUTE SPEAKER LATENT (The "Constant Latent" Strategy)
     # -------------------------------------------------------------------------
     print("⏳ Pre-computing speaker latent from reference audio...")
-    # Find a valid reference audio file
     ref_audio_path = None
     for f in os.listdir(WAVS_DIR):
         if f.endswith(".wav"):
@@ -202,24 +201,20 @@ def main():
 
     print(f"   Using reference: {ref_audio_path}")
     
-    # Load raw audio [1, T]
     wav = model.ap.load_wav(ref_audio_path)
-    # Speaker Encoder expects [Batch, 1, Time]
     wav_tensor = torch.FloatTensor(wav).unsqueeze(0).unsqueeze(0)
     
     if torch.cuda.is_available():
         wav_tensor = wav_tensor.cuda()
 
-    # Compute Latent
     with torch.no_grad():
         speaker_latent = model.hifigan_decoder.speaker_encoder(wav_tensor)
         print(f"✅ Speaker Latent Computed: {speaker_latent.shape}")
         
-    # Store it on the model to access in the training loop
     model.fixed_speaker_latent = speaker_latent
 
     # -------------------------------------------------------------------------
-    # 🛠️ PATCH 7: CUSTOM GPT TRAINING STEP
+    # 🛠️ PATCH 7: CUSTOM GPT TRAINING STEP (FINAL FIX)
     # -------------------------------------------------------------------------
     def patched_train_step(self, batch, criterion=None):
         text_inputs = batch.get("text_input")
@@ -227,22 +222,22 @@ def main():
         mel_inputs = batch.get("mel_input")
         mel_lengths = batch.get("mel_lengths")
 
-        # 1. Compute Codes (Mel -> Codes)
+        # 1. TRANSPOSE: [B, T, C] -> [B, C, T]
         mel_inputs_transposed = mel_inputs.transpose(1, 2)
+
+        # 2. Compute Codes
         with torch.no_grad():
             audio_codes = self.dvae.get_codebook_indices(mel_inputs_transposed)
 
-        # 2. Use Pre-computed Speaker Latent
-        # Expand [1, D] -> [Batch, D]
+        # 3. Use Pre-computed Speaker Latent
         batch_size = text_inputs.shape[0]
         cond_latents = self.fixed_speaker_latent.expand(batch_size, -1)
 
-        # 3. Train GPT
+        # 4. Train GPT (Removed redundant 'audio_lengths' argument)
         outputs = self.gpt(
             text_inputs=text_inputs,
             text_lengths=text_lengths,
             audio_codes=audio_codes,
-            audio_lengths=mel_lengths,
             cond_latents=cond_latents
         )
         return outputs, outputs
