@@ -2,6 +2,7 @@ import os
 import csv
 import json
 import random
+import torch
 from trainer import Trainer, TrainerArgs
 from TTS.tts.configs.shared_configs import BaseDatasetConfig
 from TTS.tts.configs.xtts_config import XttsConfig
