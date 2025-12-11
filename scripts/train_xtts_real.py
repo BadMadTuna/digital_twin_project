@@ -214,7 +214,7 @@ def main():
     model.fixed_speaker_latent = speaker_latent
 
     # -------------------------------------------------------------------------
-    # 🛠️ PATCH 7: CUSTOM GPT TRAINING STEP (FINAL CLEANUP)
+    # 🛠️ PATCH 7: CUSTOM GPT TRAINING STEP (Final Dimension Fix)
     # -------------------------------------------------------------------------
     def patched_train_step(self, batch, criterion=None):
         text_inputs = batch.get("text_input")
@@ -230,19 +230,20 @@ def main():
             audio_codes = self.dvae.get_codebook_indices(mel_inputs_transposed)
 
         # 3. Use Pre-computed Speaker Latent
+        # 🛠️ FINAL DIMENSION FIX: Add the missing Sequence dimension (T=1)
         batch_size = text_inputs.shape[0]
-        cond_latents = self.fixed_speaker_latent.expand(batch_size, -1)
+        cond_latents_3d = self.fixed_speaker_latent.unsqueeze(1).expand(batch_size, -1, -1)
 
-        # 4. Train GPT (Final Argument Combination)
-        # Note: We pass the calculated latent under BOTH possible names (cond_mels and cond_latents) 
-        # to ensure the internal code bypasses the bug on line 463 while using the right data.
+        # 4. Train GPT (Final Call)
+        # Note: We pass the 3D latent tensor under the name 'cond_mels' to satisfy the masking bug,
+        # and as 'cond_latents' to satisfy the data input.
         outputs = self.gpt(
             text_inputs=text_inputs,
             text_lengths=text_lengths,
             audio_codes=audio_codes,
-            wav_lengths=mel_lengths, # We know this is required
-            cond_mels=cond_latents,    # FIX: Pass the latent here to satisfy the masking check (bug fix)
-            cond_latents=cond_latents  # Original argument that uses the data
+            wav_lengths=mel_lengths,
+            cond_mels=cond_latents_3d,   # FIX: Satisfy the bug's shape check
+            cond_latents=cond_latents_3d # FIX: Pass the 3D tensor to the latent argument
         )
         return outputs, outputs
 
