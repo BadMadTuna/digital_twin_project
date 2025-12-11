@@ -32,20 +32,19 @@ print("Loading model architecture...")
 config = XttsConfig()
 config.load_json(CONFIG_PATH)
 
-# --- FINAL FIX: Retrieve parameters robustly ---
+# --- FINAL FIXES: Retrieve parameters robustly ---
 SR = config.audio.sample_rate
 
-# FIX 1: Safely access NFFT, falling back to fft_size if n_fft is missing.
+# Fix 1: Safely access NFFT, falling back to fft_size if n_fft is missing.
 NFFT = getattr(config.audio, 'n_fft', getattr(config.audio, 'fft_size', 1024))
 WL = getattr(config.audio, 'win_length', NFFT)
-# 🛠️ FINAL FIX: Safely access hop_length, falling back to frame_shift or 256.
 HL = getattr(config.audio, 'hop_length', getattr(config.audio, 'frame_shift', 256))
-NUM_MELS = config.audio.num_mels
+# 🛠️ FINAL FIX: Safely access num_mels, defaulting to 80.
+NUM_MELS = getattr(config.audio, 'num_mels', 80) 
 
 # CRITICAL FIX: Delete conflicting millisecond attributes to prevent NoneType error
 if hasattr(config.audio, 'frame_length_ms'): delattr(config.audio, 'frame_length_ms')
 if hasattr(config.audio, 'frame_shift_ms'): delattr(config.audio, 'frame_shift_ms')
-
 
 model = Xtts.init_from_config(config)
 
