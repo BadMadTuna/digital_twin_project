@@ -34,17 +34,16 @@ config.load_json(CONFIG_PATH)
 
 # --- FINAL FIX: Retrieve parameters robustly ---
 SR = config.audio.sample_rate
-NFFT = config.audio.n_fft
-# 🛠️ FIX: Use getattr with n_fft as the fallback default for win_length
+
+# 🛠️ FIX: Safely access NFFT, falling back to fft_size if n_fft is missing.
+NFFT = getattr(config.audio, 'n_fft', getattr(config.audio, 'fft_size', 1024))
 WL = getattr(config.audio, 'win_length', NFFT)
 HL = config.audio.hop_length
 NUM_MELS = config.audio.num_mels
 
-
-# 🛠️ CRITICAL FIX: Delete conflicting millisecond attributes to prevent NoneType error
+# CRITICAL FIX: Delete conflicting millisecond attributes to prevent NoneType error
 if hasattr(config.audio, 'frame_length_ms'): delattr(config.audio, 'frame_length_ms')
 if hasattr(config.audio, 'frame_shift_ms'): delattr(config.audio, 'frame_shift_ms')
-
 
 model = Xtts.init_from_config(config)
 
@@ -65,10 +64,8 @@ print("Initializing AudioProcessor...")
 frame_length_ms = WL * 1000 / SR
 frame_shift_ms = HL * 1000 / SR
 
-# Prepare the dictionary for AudioProcessor, ensuring required values are present
-audio_config_dict = {
-    k: v for k, v in config.audio.to_dict().items() if v is not None
-}
+# Prepare the dictionary, ensuring required values are non-null
+audio_config_dict = {k: v for k, v in config.audio.to_dict().items() if v is not None}
 
 # Inject the calculated, non-None millisecond values
 audio_config_dict["frame_length_ms"] = frame_length_ms
