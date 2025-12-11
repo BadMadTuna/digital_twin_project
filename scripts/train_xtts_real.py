@@ -219,8 +219,9 @@ def main():
         feature_map = model.gpt.get_conditioning(mels) 
         
         # 🛠️ FINAL DIMENSIONAL FIX: Pool feature map [1, 1, C, T] -> [1, C]
-        # We average over the Time axis (dim -1 or 3) and the singleton channel axis (dim 1)
-        speaker_latent = feature_map.mean(dim=[-1, 1]).squeeze(1) 
+        # We average across the last two dimensions (C and T) and squeeze the singleton dimensions (B and S)
+        # We also use keepdim=False in mean to force the reduction.
+        speaker_latent = feature_map.mean(dim=[-2, -1], keepdim=False).squeeze(1) 
         
         print(f"✅ Speaker Latent Computed: {speaker_latent.shape}")
         
@@ -244,7 +245,9 @@ def main():
             audio_codes = self.dvae.get_codebook_indices(mel_inputs_transposed)
 
         # 3. Use Pre-computed Speaker Latent
+        # FINAL DIMENSION FIX: Unsqueeze and expand the 512/1024-dim latent to 3D for concatenation [B, 1, D]
         batch_size = text_inputs.shape[0]
+        # We assume self.fixed_speaker_latent is [1, D]
         cond_latents_3d = self.fixed_speaker_latent.unsqueeze(1).expand(batch_size, -1, -1)
 
         # 4. Train GPT (Final Call)
@@ -260,10 +263,6 @@ def main():
         # 5. Extract and return loss
         loss_text, loss_mel, mel_logits = outputs
         total_loss = loss_text + loss_mel
-        
-        # We need to calculate the gradient, so ensure the outputs are not detached by being in a torch.no_grad block
-        # Loss must be calculated from outputs.
-        # Loss is calculated in the forward pass, so we trust it.
         
         return outputs, {"loss": total_loss, "loss_text": loss_text, "loss_mel": loss_mel}
 
