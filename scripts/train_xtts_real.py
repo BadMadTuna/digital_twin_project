@@ -144,7 +144,7 @@ def resurrect_dvae(model, checkpoint_dir):
 # -------------------------------------------------------------------------
 def main():
     train_json, eval_json = "metadata_train.json", "metadata_eval.json"
-    format_dataset(CSV_FILE, train_json, eval_json)
+    format_dataset(METADATA_CSV, train_json, eval_json)
 
     manager = ModelManager()
     model_path_tuple = manager.download_model("tts_models/multilingual/multi-dataset/xtts_v2")
