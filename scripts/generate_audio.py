@@ -80,11 +80,9 @@ WL = getattr(config.audio, 'win_length', NFFT)
 HL = getattr(config.audio, 'hop_length', getattr(config.audio, 'frame_shift', 256))
 NUM_MELS = getattr(config.audio, 'num_mels', 80)
 
-# Calculate the millisecond values to inject
 frame_length_ms = WL * 1000 / SR
 frame_shift_ms = HL * 1000 / SR
 
-# Prepare the dictionary
 audio_config_dict = {k: v for k, v in config.audio.to_dict().items() if v is not None}
 audio_config_dict["num_mels"] = NUM_MELS
 audio_config_dict["frame_length_ms"] = frame_length_ms
@@ -104,24 +102,21 @@ try:
     mels = torch.from_numpy(mels_numpy).unsqueeze(0).to(device)
     
     with torch.no_grad():
-        # Get raw features [1, 1024, 1] (Batch, Dim, Seq) - Wait, get_conditioning returns [B, 1024, 1] usually
-        latents = model.gpt.get_conditioning(mels) 
+        # 1. Get raw features [1, 1024, T] (Batch, Dim, Time)
+        latents_raw = model.gpt.get_conditioning(mels) 
         
-    # 🛠️ DIMENSION FIXES:
-    # 1. GPT Cond Latent: Needs to be [Batch, 1, 1024]
-    # latents is [1, 1024, 1]. We transpose to [1, 1, 1024]
-    gpt_cond_latent = latents.transpose(1, 2)
+        # 2. CRITICAL FIX: Pool over time dimension (dim=2) to get a global vector
+        # Result is [1, 1024, 1]
+        latents_pooled = latents_raw.mean(dim=2, keepdim=True)
+        
+    # 3. Prepare GPT Latent: Needs [1, 1, 1024]
+    gpt_cond_latent = latents_pooled.transpose(1, 2)
     
-    # 2. Speaker Embedding (for Vocoder): Needs to be [Batch, 512, 1]
-    # Check if we need to slice it from 1024 to 512 based on the error "expected 512 channels"
-    if latents.shape[1] == 1024:
-        # We assume the HifiGan expects the first 512 dimensions or a projection
-        # Given the error, we slice.
-        speaker_embedding = latents[:, :512, :]
-    else:
-        speaker_embedding = latents
+    # 4. Prepare Vocoder Embedding: Needs [1, 512, 1]
+    # We assume the first 512 dimensions are for the vocoder, or we use the whole thing if it expects 1024.
+    # The error message explicitly asked for 512 channels.
+    speaker_embedding = latents_pooled[:, :512, :]
 
-    # Ensure everything is on device
     gpt_cond_latent = gpt_cond_latent.to(device)
     speaker_embedding = speaker_embedding.to(device)
 
