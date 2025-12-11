@@ -15,12 +15,15 @@ from TTS.utils.manage import ModelManager
 RUN_NAME = "xtts_finetuned"
 OUT_PATH = os.path.join(os.getcwd(), "models") 
 
-# --- REPLACE THE OLD CHECKPOINT_DIR LINE WITH THIS BLOCK ---
+# --- REPLACE THE PATH BLOCK WITH THIS CORRECTED VERSION ---
 print("⏳ Verifying model path...")
 manager = ModelManager()
-# This finds the absolute path to the model file (e.g. model.pth)
-model_path_abs = manager.download_model("tts_models/multilingual/multi-dataset/xtts_v2")
-# We need the directory containing config.json, so we take the dirname
+
+# download_model returns a tuple: (model_path, config_path, model_item)
+# We only need the first item (model_path) to find the directory.
+model_path_tuple = manager.download_model("tts_models/multilingual/multi-dataset/xtts_v2")
+model_path_abs = model_path_tuple[0] 
+
 CHECKPOINT_DIR = os.path.dirname(model_path_abs)
 print(f"✅ Found model at: {CHECKPOINT_DIR}")
 
