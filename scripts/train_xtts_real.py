@@ -139,16 +139,18 @@ def main():
     model = Xtts.init_from_config(config)
     model.load_checkpoint(config, checkpoint_dir=CHECKPOINT_DIR, eval=True)
 
-    # =========================================================================
-    # 🛠️ CRITICAL FIX 1: MONKEY-PATCH get_criterion
-    # =========================================================================
+    # --- START OF COMPATIBILITY PATCHES ---
+    # 1. Patch Loss Criterion
     model.get_criterion = lambda: None
 
-    # =========================================================================
-    # 🛠️ CRITICAL FIX 2: MONKEY-PATCH save_ids_to_file
-    # =========================================================================
+    # 2. Patch Speaker Manager
     if model.speaker_manager is not None:
         model.speaker_manager.save_ids_to_file = lambda x: None
+
+    # 3. Patch Language Manager
+    if model.language_manager is not None:
+        model.language_manager.save_ids_to_file = lambda x: None
+    # --- END OF PATCHES ---
 
     if torch.cuda.is_available():
         model.cuda()
