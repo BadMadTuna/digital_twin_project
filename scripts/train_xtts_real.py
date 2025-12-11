@@ -218,14 +218,11 @@ def main():
     with torch.no_grad():
         feature_map = model.gpt.get_conditioning(mels) 
         
-        # 🛠️ FINAL DIMENSIONAL FIX: Pool feature map [B, S, C, T] -> [B, D]
-        # We average over the Time axis (dim -1) and the Sequence axis (dim 1)
-        # Note: We must explicitly keep the batch dim (0) and the feature dim (2)
+        # 🛠️ FINAL DIMENSIONAL FIX: Pool feature map [B, C, T] -> [B, C]
+        # We average across the Time axis (dim 2)
+        speaker_latent = feature_map.mean(dim=2, keepdim=False)
         
-        # Correctly pool the 4D tensor down to a 2D tensor [1, 1024]
-        speaker_latent = feature_map.mean(dim=[1, 3], keepdim=False)
-        
-        # Since B=1, we squeeze the batch dimension too if it was kept
+        # Ensure B=1 dimension is removed if B=1
         if speaker_latent.dim() == 2 and speaker_latent.shape[0] == 1:
             speaker_latent = speaker_latent.squeeze(0)
         
@@ -236,7 +233,7 @@ def main():
 
     # -------------------------------------------------------------------------
     # 🛠️ PATCH 7: CUSTOM GPT TRAINING STEP (FINAL CLEANUP)
-    # -------------------------------------------------------------------------
+    -------------------------------------------------------------------------
     def patched_train_step(self, batch, criterion=None):
         text_inputs = batch.get("text_input")
         text_lengths = batch.get("text_lengths")
@@ -251,7 +248,8 @@ def main():
             audio_codes = self.dvae.get_codebook_indices(mel_inputs_transposed)
 
         # 3. Use Pre-computed Speaker Latent
-        # We assume self.fixed_speaker_latent is now [D] or [1, D]
+        # FINAL DIMENSION FIX: Unsqueeze and expand the 512/1024-dim latent to 3D for concatenation [B, 1, D]
+        # Note: self.fixed_speaker_latent is already [D] or [1, D].
         if self.fixed_speaker_latent.dim() == 1:
             latent_2d = self.fixed_speaker_latent.unsqueeze(0)
         else:
