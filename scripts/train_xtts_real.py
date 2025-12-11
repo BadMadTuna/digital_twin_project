@@ -131,7 +131,7 @@ def resurrect_dvae(model, checkpoint_dir):
     if torch.cuda.is_available():
         dvae = dvae.cuda()
         
-    model.dvae = dvea
+    model.dvae = dvae
     return model.dvae
 
 # -------------------------------------------------------------------------
