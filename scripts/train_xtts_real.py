@@ -5,6 +5,7 @@ import random
 import torch
 import types
 import sys
+import requests
 from TTS.utils.manage import ModelManager
 from TTS.utils.audio import AudioProcessor
 from trainer import Trainer, TrainerArgs
@@ -62,12 +63,41 @@ def load_json_data(json_file):
     return data
 
 # -------------------------------------------------------------------------
-# 🛠️ RESURRECTION UTILITY: KEY HUNTER EDITION
+# 🛠️ DOWNLOADER: FETCH MISSING VQGAN
+# -------------------------------------------------------------------------
+def download_dvae_if_missing(checkpoint_dir):
+    dvae_path = os.path.join(checkpoint_dir, "dvae.pth")
+    if os.path.exists(dvae_path):
+        return dvae_path
+    
+    print("⚠️  dvae.pth missing. Downloading from Hugging Face...")
+    url = "https://coqui.gateway.scarf.sh/hf-coqui/XTTS-v2/main/dvae.pth"
+    try:
+        r = requests.get(url, allow_redirects=True)
+        with open(dvae_path, 'wb') as f:
+            f.write(r.content)
+        print("✅ dvae.pth downloaded successfully.")
+    except Exception as e:
+        print(f"❌ Failed to download dvae.pth: {e}")
+        # Fallback URL just in case
+        try:
+             url_backup = "https://huggingface.co/coqui/XTTS-v2/resolve/main/dvae.pth"
+             r = requests.get(url_backup, allow_redirects=True)
+             with open(dvae_path, 'wb') as f:
+                f.write(r.content)
+             print("✅ dvae.pth downloaded successfully (backup).")
+        except:
+             sys.exit("Could not download dvae.pth. Please download it manually.")
+             
+    return dvae_path
+
+# -------------------------------------------------------------------------
+# 🛠️ RESURRECTION UTILITY
 # -------------------------------------------------------------------------
 def resurrect_dvae(model, checkpoint_dir):
     print("✨ Attempting to resurrect missing VQGAN/DVAE...")
     
-    # 1. Import Class (Use the path found earlier)
+    # 1. Import Class
     try:
         from TTS.tts.layers.xtts.dvae import DiscreteVAE
     except ImportError as e:
@@ -80,66 +110,14 @@ def resurrect_dvae(model, checkpoint_dir):
         codebook_dim=512, hidden_dim=512, num_resnet_blocks=3, kernel_size=3, num_layers=2
     )
     
-    # 3. Load Weights - THE KEY HUNTER
+    # 3. Download & Load Weights
+    dvae_path = download_dvae_if_missing(checkpoint_dir)
+    print(f"   Loading weights from {dvae_path}...")
     
-    # Check for separate DVAE file first
-    dvae_path = os.path.join(checkpoint_dir, "dvae.pth")
-    model_path = os.path.join(checkpoint_dir, "model.pth")
+    checkpoint = torch.load(dvae_path, map_location="cpu")
     
-    state_dict_to_load = None
-    
-    if os.path.exists(dvae_path):
-        print(f"   Found separate DVAE checkpoint: {dvae_path}")
-        state_dict_to_load = torch.load(dvae_path, map_location="cpu")
-    else:
-        print(f"   Loading main checkpoint: {model_path}")
-        checkpoint = torch.load(model_path, map_location="cpu")
-        if "model" in checkpoint:
-            state_dict_to_load = checkpoint["model"]
-        else:
-            state_dict_to_load = checkpoint
-
-    # 4. Filter Keys
-    # We look for standard prefixes
-    prefixes_to_try = ["dvae.", "hifigan_decoder.vqgan.", "vqgan."]
-    dvae_state_dict = {}
-    
-    # Try known prefixes
-    for prefix in prefixes_to_try:
-        temp_dict = {k.replace(prefix, ""): v for k, v in state_dict_to_load.items() if k.startswith(prefix)}
-        if temp_dict:
-            print(f"   ✅ Found keys with prefix: '{prefix}'")
-            dvae_state_dict = temp_dict
-            break
-            
-    # If still empty, activate KEY HUNTER
-    if not dvae_state_dict:
-        print("   ⚠️  Standard prefixes failed. Scanning all keys for DVAE-like signatures...")
-        found_candidates = []
-        for k in state_dict_to_load.keys():
-            if "codebook" in k or "encoder" in k and "gpt" not in k:
-                 found_candidates.append(k)
-        
-        if found_candidates:
-            print(f"   🔎 Found {len(found_candidates)} candidate keys. Examples:")
-            for k in found_candidates[:5]: print(f"      - {k}")
-            
-            # Attempt to guess prefix from the first candidate
-            # e.g. "some.weird.prefix.codebook" -> prefix is "some.weird.prefix."
-            first_key = found_candidates[0]
-            if "codebook" in first_key:
-                # split at codebook
-                guessed_prefix = first_key.split("codebook")[0]
-                print(f"   🎯 Guessing prefix: '{guessed_prefix}'")
-                dvae_state_dict = {k.replace(guessed_prefix, ""): v for k, v in state_dict_to_load.items() if k.startswith(guessed_prefix)}
-
-    if not dvae_state_dict:
-        print("❌ VQGAN weights NOT found. Dumping random keys to debug:")
-        keys = list(state_dict_to_load.keys())
-        for k in keys[:20]: print(f"   - {k}")
-        sys.exit(1)
-        
-    dvae.load_state_dict(dvae_state_dict, strict=False) # Strict=False to be forgiving
+    # Check strictness: keys in dvae.pth usually map directly
+    dvae.load_state_dict(checkpoint, strict=True)
     print("✅ DVAE weights loaded successfully.")
 
     if torch.cuda.is_available():
@@ -192,7 +170,7 @@ def main():
     if model.ap is None:
         model.ap = AudioProcessor(sample_rate=22050, num_mels=80, do_trim_silence=True, n_fft=1024, win_length=1024, hop_length=256)
 
-    # 🛠️ RESURRECT DVAE (With Key Hunter)
+    # 🛠️ RESURRECT DVAE (With Auto-Download)
     resurrect_dvae(model, CHECKPOINT_DIR)
 
     # -------------------------------------------------------------------------
