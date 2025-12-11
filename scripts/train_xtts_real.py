@@ -189,7 +189,7 @@ def main():
     resurrect_dvae(model, CHECKPOINT_DIR)
 
     # -------------------------------------------------------------------------
-    # 🛠️ PATCH 7: CUSTOM GPT TRAINING STEP (FINAL FIX)
+    # 🛠️ PATCH 7: CUSTOM GPT TRAINING STEP (DIRECT ACCESS)
     # -------------------------------------------------------------------------
     def patched_train_step(self, batch, criterion=None):
         text_inputs = batch.get("text_input")
@@ -198,46 +198,4 @@ def main():
         mel_lengths = batch.get("mel_lengths")
 
         # 🛠️ TRANSPOSE: [B, T, C] -> [B, C, T]
-        mel_inputs_transposed = mel_inputs.transpose(1, 2)
-
-        # Compute Codes
-        with torch.no_grad():
-            # 🛠️ USE 'get_codebook_indices'
-            # This method was found via inspection and is the correct way to get codes
-            # directly from input mels.
-            audio_codes = self.dvae.get_codebook_indices(mel_inputs_transposed)
-
-        # Compute Latents
-        with torch.no_grad():
-            if hasattr(self, "speaker_encoder"):
-                cond_latents = self.speaker_encoder(mel_inputs_transposed)
-            else:
-                cond_latents = self.hifigan_decoder(mel_inputs_transposed, return_latents=True)
-
-        # Train GPT
-        outputs = self.gpt(
-            text_inputs=text_inputs,
-            text_lengths=text_lengths,
-            audio_codes=audio_codes,
-            audio_lengths=mel_lengths,
-            cond_latents=cond_latents
-        )
-        return outputs, outputs
-
-    model.train_step = types.MethodType(patched_train_step, model)
-    # -------------------------------------------------------------------------
-
-    print("⏳ Loading data samples...")
-    train_samples = load_json_data(train_json)
-    eval_samples = load_json_data(eval_json)
-
-    trainer = Trainer(
-        TrainerArgs(restore_path=None, skip_train_epoch=False, start_with_eval=False),
-        config, output_path=OUT_PATH, model=model, train_samples=train_samples, eval_samples=eval_samples,   
-    )
-
-    print("🚀 Starting Training...")
-    trainer.fit()
-
-if __name__ == "__main__":
-    main()
+        mel_inputs_transposed = mel_inputs.transpose
