@@ -15,7 +15,7 @@ from TTS.tts.models.xtts import Xtts
 from TTS.tts.datasets.formatters import *
 
 # -------------------------------------------------------------------------
-# CONFIGURATION & PATHS
+# CONFIGURATION
 # -------------------------------------------------------------------------
 RUN_NAME = "xtts_finetuned"
 OUT_PATH = os.path.join(os.getcwd(), "models")
@@ -28,7 +28,7 @@ EPOCHS = 10
 LEARNING_RATE = 5e-6
 
 # -------------------------------------------------------------------------
-# HELPER: FORMAT DATA
+# HELPERS
 # -------------------------------------------------------------------------
 def format_dataset(csv_file, train_json, eval_json):
     if not os.path.exists(csv_file): raise FileNotFoundError(f"❌ Could not find {csv_file}")
@@ -85,10 +85,11 @@ def main():
 
     print("⬇️  Loading XTTS v2 Base Model...")
     model = Xtts.init_from_config(config)
-    model.load_checkpoint(config, checkpoint_dir=CHECKPOINT_DIR, eval=True)
+    # 🛠️ Change: Load with eval=False to potentially enable training structures
+    model.load_checkpoint(config, checkpoint_dir=CHECKPOINT_DIR, eval=False)
     if torch.cuda.is_available(): model.cuda()
 
-    # --- PATCHES ---
+    # --- COMPATIBILITY PATCHES ---
     model.get_criterion = lambda: None
     if model.speaker_manager:
         model.speaker_manager.save_ids_to_file = lambda x: None
@@ -107,30 +108,47 @@ def main():
         model.ap = AudioProcessor(sample_rate=22050, num_mels=80, do_trim_silence=True, n_fft=1024, win_length=1024, hop_length=256)
 
     # -------------------------------------------------------------------------
-    # 🔍 DIAGNOSTIC: FIND THE REAL TRAINING METHOD
+    # 🔍 DIAGNOSTIC PATCH: INSPECT BATCH DATA
     # -------------------------------------------------------------------------
-    print("\n" + "="*50)
-    print("🔍 INSPECTING AVAILABLE METHODS")
-    print("="*50)
-    
-    # 1. List all methods on the model object
-    methods = [func for func in dir(model) if callable(getattr(model, func)) and not func.startswith("__")]
-    
-    # 2. Filter for interesting ones
-    interesting = [m for m in methods if "train" in m or "loss" in m or "step" in m or "forward" in m]
-    
-    print("Potential Training Methods Found:")
-    for m in interesting:
-        print(f" - {m}")
+    def patched_train_step(self, batch, criterion=None):
+        print("\n" + "="*50)
+        print("🔍 INSPECTING BATCH KEYS")
+        print("="*50)
         
-    print("\nModel Keys (Sub-modules):")
-    print([k for k in model.__dict__.keys()])
+        # 1. Print all keys available in the batch
+        print(f"Batch Keys: {list(batch.keys())}")
+        
+        # 2. Check shapes of interesting items
+        for k, v in batch.items():
+            if hasattr(v, 'shape'):
+                print(f" - {k}: {v.shape}")
+            else:
+                print(f" - {k}: {type(v)}")
 
-    print("="*50 + "\n")
-    sys.exit("⛔ Stopping for inspection.")
+        # 3. Check for model.gpt again (now that we are inside execution)
+        print("-" * 20)
+        if hasattr(self, "gpt"):
+             print("✅ model.gpt EXISTS!")
+        else:
+             print("❌ model.gpt is MISSING")
+
+        print("="*50 + "\n")
+        sys.exit("⛔ Stopping for inspection.")
+
+    model.train_step = types.MethodType(patched_train_step, model)
     # -------------------------------------------------------------------------
 
-    # (Trainer code removed for this step)
+    print("⏳ Loading data samples...")
+    train_samples = load_json_data(train_json)
+    eval_samples = load_json_data(eval_json)
+
+    trainer = Trainer(
+        TrainerArgs(restore_path=None, skip_train_epoch=False, start_with_eval=False),
+        config, output_path=OUT_PATH, model=model, train_samples=train_samples, eval_samples=eval_samples,   
+    )
+
+    print("🚀 Starting Training...")
+    trainer.fit()
 
 if __name__ == "__main__":
     main()
