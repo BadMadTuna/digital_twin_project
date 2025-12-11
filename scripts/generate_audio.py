@@ -10,9 +10,11 @@ from TTS.tts.layers.xtts.tokenizer import VoiceBpeTokenizer
 
 # --------------------------------------------------------------------------
 # --- CONFIGURATION ---
-MODEL_DIR = "/home/ubuntu/digital_twin_project/models/xtts_finetuned-December-11-2025_03+45PM-482c5df"
+MODEL_DIR = "/home/ubuntu/digital_twin_project/models/xtts_finetuned-December-11-2025_02+59PM-bae2302"
+#MODEL_DIR = "/home/ubuntu/digital_twin_project/models/xtts_finetuned-December-11-2025_03+45PM-482c5df"
 # Use the checkpoint you verified exists
-MODEL_CHECKPOINT_NAME = "checkpoint_8000.pth" 
+MODEL_CHECKPOINT_NAME = "checkpoint_5000.pth" 
+#MODEL_CHECKPOINT_NAME = "checkpoint_8000.pth" 
 MODEL_CHECKPOINT_PATH = os.path.join(MODEL_DIR, MODEL_CHECKPOINT_NAME)
 CONFIG_PATH = os.path.join(MODEL_DIR, "config.json")
 
