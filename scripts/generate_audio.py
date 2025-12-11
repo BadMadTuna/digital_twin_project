@@ -35,7 +35,7 @@ config.load_json(CONFIG_PATH)
 # --- FINAL FIXES: Retrieve parameters robustly ---
 SR = config.audio.sample_rate
 
-# Fix 1: Safely access NFFT, falling back to fft_size if n_fft is missing.
+# Safely access NFFT, falling back to fft_size if n_fft is missing.
 NFFT = getattr(config.audio, 'n_fft', getattr(config.audio, 'fft_size', 1024))
 WL = getattr(config.audio, 'win_length', NFFT)
 HL = getattr(config.audio, 'hop_length', getattr(config.audio, 'frame_shift', 256))
@@ -67,6 +67,9 @@ frame_shift_ms = HL * 1000 / SR
 
 # Prepare the dictionary, ensuring required values are non-null
 audio_config_dict = {k: v for k, v in config.audio.to_dict().items() if v is not None}
+
+# 🛠️ FINAL FIX: Inject the required NUM_MELS value
+audio_config_dict["num_mels"] = NUM_MELS
 
 # Inject the calculated, non-None millisecond values
 audio_config_dict["frame_length_ms"] = frame_length_ms
