@@ -151,6 +151,7 @@ def main():
 
     if model.tokenizer is not None:
         model.tokenizer.use_phonemes = False
+        model.tokenizer.print_logs = lambda *args, **kwargs: None
 
     # 2. Patch Speaker Manager
     if model.speaker_manager is not None:
