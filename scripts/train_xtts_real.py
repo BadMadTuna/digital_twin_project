@@ -9,6 +9,7 @@ from TTS.tts.configs.shared_configs import BaseDatasetConfig
 from TTS.tts.configs.xtts_config import XttsConfig
 from TTS.tts.models.xtts import Xtts
 from TTS.tts.datasets.formatters import *
+from TTS.utils.audio import AudioProcessor
 
 # -------------------------------------------------------------------------
 # CONFIGURATION & PATHS
@@ -150,6 +151,11 @@ def main():
     config.model_args.use_speaker_embedding = True
     config.model_args.use_d_vector_file = False
     config.model_args.use_language_embedding = False
+
+    # Patch 6: Audio Processor
+    # The dataset loader relies on this to read WAV files.
+    if model.ap is None:
+        model.ap = AudioProcessor(sample_rate=22050)
     
     # =========================================================================
 
