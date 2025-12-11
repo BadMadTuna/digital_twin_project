@@ -198,4 +198,43 @@ def main():
         mel_lengths = batch.get("mel_lengths")
 
         # 🛠️ TRANSPOSE: [B, T, C] -> [B, C, T]
-        mel_inputs_transposed = mel_inputs.transpose
+        mel_inputs_transposed = mel_inputs.transpose(1, 2)
+
+        # 1. Compute Codes (Using helper method)
+        with torch.no_grad():
+            audio_codes = self.dvae.get_codebook_indices(mel_inputs_transposed)
+
+        # 2. Compute Latents (Direct Access to submodule)
+        with torch.no_grad():
+            # 🛠️ FIX: Don't call the wrapper, call the encoder directly.
+            # We found 'hifigan_decoder.speaker_encoder' in the inspection logs.
+            cond_latents = self.hifigan_decoder.speaker_encoder(mel_inputs_transposed)
+
+        # 3. Train GPT
+        # Note: We must pass 'audio_codes' and 'cond_latents' explicitly
+        outputs = self.gpt(
+            text_inputs=text_inputs,
+            text_lengths=text_lengths,
+            audio_codes=audio_codes,
+            audio_lengths=mel_lengths,
+            cond_latents=cond_latents
+        )
+        return outputs, outputs
+
+    model.train_step = types.MethodType(patched_train_step, model)
+    # -------------------------------------------------------------------------
+
+    print("⏳ Loading data samples...")
+    train_samples = load_json_data(train_json)
+    eval_samples = load_json_data(eval_json)
+
+    trainer = Trainer(
+        TrainerArgs(restore_path=None, skip_train_epoch=False, start_with_eval=False),
+        config, output_path=OUT_PATH, model=model, train_samples=train_samples, eval_samples=eval_samples,   
+    )
+
+    print("🚀 Starting Training...")
+    trainer.fit()
+
+if __name__ == "__main__":
+    main()
