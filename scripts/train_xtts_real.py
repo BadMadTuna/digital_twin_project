@@ -233,7 +233,7 @@ def main():
 
     # -------------------------------------------------------------------------
     # 🛠️ PATCH 7: CUSTOM GPT TRAINING STEP (FINAL CLEANUP)
-    -------------------------------------------------------------------------
+    #--------------------------------------------------------------------------
     def patched_train_step(self, batch, criterion=None):
         text_inputs = batch.get("text_input")
         text_lengths = batch.get("text_lengths")
