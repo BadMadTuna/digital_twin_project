@@ -3,6 +3,8 @@ import csv
 import json
 import random
 import torch
+import types
+import inspect
 from TTS.utils.manage import ModelManager
 from TTS.utils.audio import AudioProcessor
 from trainer import Trainer, TrainerArgs
@@ -18,14 +20,14 @@ RUN_NAME = "xtts_finetuned"
 OUT_PATH = os.path.join(os.getcwd(), "models")
 METADATA_CSV = "metadata.csv"
 
-# 🛠️ FIX: Relative path to your actual audio files
+# Path to audio files
 WAVS_DIR = "audio_data/dataset/wavs" 
 
 LANGUAGE = "en"
 SPEAKER_NAME = "my_speaker"
 
 # Training Hyperparameters
-BATCH_SIZE = 2  # Set to 2 to be safe against OOM
+BATCH_SIZE = 2 
 EPOCHS = 10
 LEARNING_RATE = 5e-6
 
@@ -47,7 +49,7 @@ def format_dataset(csv_file, train_json, eval_json):
             text = row[1].strip()
             audio_path = os.path.join(WAVS_DIR, audio_name)
             
-            # 🛠️ FIX: Add 'audio_unique_name' for the dataset loader
+            # Create XTTS entry with 'audio_unique_name'
             items.append({
                 "text": text,
                 "audio_file": audio_path,
@@ -73,7 +75,7 @@ def format_dataset(csv_file, train_json, eval_json):
     print(f"✅ Created {len(train_items)} training samples and {len(eval_items)} eval samples.")
 
 # -------------------------------------------------------------------------
-# HELPER 2: LOAD JSON DATA (Prevents NoneType error)
+# HELPER 2: LOAD JSON DATA
 # -------------------------------------------------------------------------
 def load_json_data(json_file):
     data = []
@@ -91,12 +93,11 @@ def main():
     eval_json = "metadata_eval.json"
     format_dataset(METADATA_CSV, train_json, eval_json)
 
-    # 2. Locate Model Path (Robust Method)
+    # 2. Locate Model Path
     print("⏳ Verifying model path...")
     manager = ModelManager()
     model_path_tuple = manager.download_model("tts_models/multilingual/multi-dataset/xtts_v2")
     
-    # Handle tuple return safely
     model_path = model_path_tuple[0]
     if os.path.isfile(model_path):
         CHECKPOINT_DIR = os.path.dirname(model_path)
@@ -126,7 +127,7 @@ def main():
     config.output_path = OUT_PATH
     config.run_name = RUN_NAME
 
-    # 4. Load Model (BEFORE Patching)
+    # 4. Load Model
     print("⬇️  Loading XTTS v2 Base Model...")
     model = Xtts.init_from_config(config)
     model.load_checkpoint(config, checkpoint_dir=CHECKPOINT_DIR, eval=True)
@@ -134,20 +135,15 @@ def main():
         model.cuda()
 
     # =========================================================================
-    # 🛠️ COMPATIBILITY PATCHES (Monkey-Patching)
-    # The Generic Trainer is not natively compatible with XTTS v2.
-    # We apply these patches to bridge the gap.
+    # 🛠️ COMPATIBILITY PATCHES
     # =========================================================================
     
     # Patch 1: Loss Criterion
-    # XTTS calculates loss internally; generic trainer expects an external function.
     model.get_criterion = lambda: None
 
     # Patch 2: Speaker Manager (Nuclear Fix)
-    # Force a simple dictionary mapping to satisfy the dataset loader.
     if model.speaker_manager is not None:
         model.speaker_manager.save_ids_to_file = lambda x: None
-        # Delete class property to allow overwriting with a simple dict
         if hasattr(type(model.speaker_manager), "name_to_id"):
             delattr(type(model.speaker_manager), "name_to_id")
         model.speaker_manager.name_to_id = {SPEAKER_NAME: 0}
@@ -157,21 +153,18 @@ def main():
         model.language_manager.save_ids_to_file = lambda x: None
 
     # Patch 4: Tokenizer
-    # XTTS uses BPE, not phonemes. We silence logs and map text_to_ids to encode.
     if model.tokenizer is not None:
         model.tokenizer.use_phonemes = False
         model.tokenizer.print_logs = lambda *args, **kwargs: None
         model.tokenizer.text_to_ids = lambda t: model.tokenizer.encode(t, lang=LANGUAGE)
 
     # Patch 5: Config Attributes
-    # Inject missing flags that the generic Trainer checks for.
     config.model_args.use_speaker_embedding = True
     config.model_args.use_d_vector_file = False
     config.model_args.use_language_embedding = False
-    config.r = 1  # Reduction factor (Legacy param, set to 1 for XTTS)
+    config.r = 1
 
     # Patch 6: Audio Processor
-    # Initialize with specific FFT settings to prevent division-by-zero errors.
     if model.ap is None:
         model.ap = AudioProcessor(
             sample_rate=22050,
@@ -182,18 +175,25 @@ def main():
             hop_length=256
         )
 
-    # Patch 7: Train Step (Class-Level Patch)
-    # Wrap the train_step method to accept (and ignore) the 'criterion' argument.
-    if not hasattr(Xtts, "_original_train_step"):
-        Xtts._original_train_step = Xtts.train_step
-        
-    def patched_train_step(self, batch, criterion=None):
-        return self._original_train_step(batch)
+    # Patch 7: Train Step (Robust Method Binding)
+    # We explicitly bind the function to the instance to ensure 'self' is passed correctly.
+    # The Generic Trainer passes (batch, criterion), but XTTS only accepts (batch).
     
-    Xtts.train_step = patched_train_step
+    # Capture the original bound method
+    _original_train_step = model.train_step
+
+    def patched_train_step(self, batch, criterion=None):
+        # We ignore 'criterion' and pass only 'batch' to the original method.
+        # Note: _original_train_step is ALREADY bound to 'model', so we call it 
+        # like a normal function. We do NOT pass 'self' again.
+        return _original_train_step(batch)
+
+    # Bind the new method to the instance
+    model.train_step = types.MethodType(patched_train_step, model)
+    
     # =========================================================================
 
-    # 5. Load Data manually to avoid internal loader errors
+    # 5. Load Data
     print("⏳ Loading data samples...")
     train_samples = load_json_data(train_json)
     eval_samples = load_json_data(eval_json)
