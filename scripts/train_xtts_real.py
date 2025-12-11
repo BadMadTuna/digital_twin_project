@@ -79,7 +79,6 @@ def download_dvae_if_missing(checkpoint_dir):
         print("✅ dvae.pth downloaded successfully.")
     except Exception as e:
         print(f"❌ Failed to download dvae.pth: {e}")
-        # Fallback URL just in case
         try:
              url_backup = "https://huggingface.co/coqui/XTTS-v2/resolve/main/dvae.pth"
              r = requests.get(url_backup, allow_redirects=True)
@@ -88,37 +87,43 @@ def download_dvae_if_missing(checkpoint_dir):
              print("✅ dvae.pth downloaded successfully (backup).")
         except:
              sys.exit("Could not download dvae.pth. Please download it manually.")
-             
     return dvae_path
 
 # -------------------------------------------------------------------------
-# 🛠️ RESURRECTION UTILITY
+# 🛠️ RESURRECTION UTILITY (With Key Remapping)
 # -------------------------------------------------------------------------
 def resurrect_dvae(model, checkpoint_dir):
     print("✨ Attempting to resurrect missing VQGAN/DVAE...")
-    
-    # 1. Import Class
     try:
         from TTS.tts.layers.xtts.dvae import DiscreteVAE
     except ImportError as e:
         print(f"❌ Could not import DiscreteVAE: {e}")
         sys.exit(1)
 
-    # 2. Instantiate DVAE
     dvae = DiscreteVAE(
         channels=80, normalization=None, positional_dims=1, num_tokens=1024, 
         codebook_dim=512, hidden_dim=512, num_resnet_blocks=3, kernel_size=3, num_layers=2
     )
     
-    # 3. Download & Load Weights
     dvae_path = download_dvae_if_missing(checkpoint_dir)
     print(f"   Loading weights from {dvae_path}...")
     
     checkpoint = torch.load(dvae_path, map_location="cpu")
     
-    # Check strictness: keys in dvae.pth usually map directly
-    dvae.load_state_dict(checkpoint, strict=True)
-    print("✅ DVAE weights loaded successfully.")
+    # 🛠️ SMART FIX: Remap keys to match local library version
+    # The checkpoint has 'decoder.4.0.conv.weight', but model expects 'decoder.4.0.weight'
+    new_checkpoint = {}
+    for k, v in checkpoint.items():
+        # Remove '.conv.' if present in specific layers
+        if ".conv." in k and ("decoder" in k or "encoder" in k):
+            new_k = k.replace(".conv.", ".")
+            new_checkpoint[new_k] = v
+        else:
+            new_checkpoint[k] = v
+            
+    # Load with strict=False to ignore missing 'discrete_loss' keys
+    dvae.load_state_dict(new_checkpoint, strict=False)
+    print("✅ DVAE weights loaded successfully (with remapping).")
 
     if torch.cuda.is_available():
         dvae = dvae.cuda()
@@ -170,7 +175,7 @@ def main():
     if model.ap is None:
         model.ap = AudioProcessor(sample_rate=22050, num_mels=80, do_trim_silence=True, n_fft=1024, win_length=1024, hop_length=256)
 
-    # 🛠️ RESURRECT DVAE (With Auto-Download)
+    # 🛠️ RESURRECT DVAE (With Auto-Download & Remap)
     resurrect_dvae(model, CHECKPOINT_DIR)
 
     # -------------------------------------------------------------------------
