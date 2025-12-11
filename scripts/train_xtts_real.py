@@ -125,7 +125,7 @@ def resurrect_dvae(model, checkpoint_dir):
     for k, v in new_checkpoint.items():
         if k in model_state:
             if v.shape != model_state[k].shape:
-                pass # Skip mismatch
+                pass 
             else:
                 filtered_checkpoint[k] = v
         else:
@@ -189,7 +189,7 @@ def main():
     resurrect_dvae(model, CHECKPOINT_DIR)
 
     # -------------------------------------------------------------------------
-    # 🛠️ PATCH 7: CUSTOM GPT TRAINING STEP (MANUAL ENCODING)
+    # 🛠️ PATCH 7: CUSTOM GPT TRAINING STEP (MANUAL ENCODING & TRANSPOSE)
     # -------------------------------------------------------------------------
     def patched_train_step(self, batch, criterion=None):
         text_inputs = batch.get("text_input")
@@ -197,19 +197,20 @@ def main():
         mel_inputs = batch.get("mel_input")
         mel_lengths = batch.get("mel_lengths")
 
+        # 🛠️ TRANSPOSE FIX: [Batch, Time, Channels] -> [Batch, Channels, Time]
+        # PyTorch Conv1d needs the channel dim in the middle.
+        mel_inputs_transposed = mel_inputs.transpose(1, 2)
+
         # Compute Codes
         with torch.no_grad():
-            # 🛠️ MANUAL ENCODE LOGIC
-            # If 'encode' is missing, we use encoder + quantize manually.
             if hasattr(self.dvae, "encode"):
-                _, _, info = self.dvae.encode(mel_inputs)
+                _, _, info = self.dvae.encode(mel_inputs_transposed)
                 audio_codes = info[2]
             else:
-                # 1. Run Encoder
-                z = self.dvae.encoder(mel_inputs)
-                # 2. Run Quantizer (usually named 'quantize' or 'vq')
+                # 1. Run Encoder (expects [B, C, T])
+                z = self.dvae.encoder(mel_inputs_transposed)
+                # 2. Run Quantizer
                 if hasattr(self.dvae, "quantize"):
-                     # Returns: (z_q, loss, (perplexity, min_encodings, indices))
                      _, _, info = self.dvae.quantize(z)
                      audio_codes = info[2]
                 elif hasattr(self.dvae, "vq"):
@@ -218,12 +219,14 @@ def main():
                 else:
                      raise RuntimeError("Could not find quantizer method on DVAE.")
 
-        # Compute Latents
+        # Compute Latents (Speaker Encoder also usually likes [B, C, T])
         with torch.no_grad():
             if hasattr(self, "speaker_encoder"):
-                cond_latents = self.speaker_encoder(mel_inputs)
+                # Note: Some speaker encoders want [B, C, T], some [B, T, C].
+                # Standard XTTS ResNetSpeakerEncoder wants [B, C, T].
+                cond_latents = self.speaker_encoder(mel_inputs_transposed)
             else:
-                cond_latents = self.hifigan_decoder(mel_inputs, return_latents=True)
+                cond_latents = self.hifigan_decoder(mel_inputs_transposed, return_latents=True)
 
         # Train GPT
         outputs = self.gpt(
