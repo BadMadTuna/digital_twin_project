@@ -35,15 +35,17 @@ config.load_json(CONFIG_PATH)
 # --- FINAL FIX: Retrieve parameters robustly ---
 SR = config.audio.sample_rate
 
-# 🛠️ FIX: Safely access NFFT, falling back to fft_size if n_fft is missing.
+# FIX 1: Safely access NFFT, falling back to fft_size if n_fft is missing.
 NFFT = getattr(config.audio, 'n_fft', getattr(config.audio, 'fft_size', 1024))
 WL = getattr(config.audio, 'win_length', NFFT)
-HL = config.audio.hop_length
+# 🛠️ FINAL FIX: Safely access hop_length, falling back to frame_shift or 256.
+HL = getattr(config.audio, 'hop_length', getattr(config.audio, 'frame_shift', 256))
 NUM_MELS = config.audio.num_mels
 
 # CRITICAL FIX: Delete conflicting millisecond attributes to prevent NoneType error
 if hasattr(config.audio, 'frame_length_ms'): delattr(config.audio, 'frame_length_ms')
 if hasattr(config.audio, 'frame_shift_ms'): delattr(config.audio, 'frame_shift_ms')
+
 
 model = Xtts.init_from_config(config)
 
