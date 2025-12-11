@@ -131,9 +131,6 @@ def main():
     config.model_args.use_d_vector_file = False
     config.model_args.use_language_embedding = False
 
-    if model.tokenizer is not None:
-        model.tokenizer.use_phonemes = False
-
     config.batch_size = BATCH_SIZE
     config.epochs = EPOCHS
     config.lr = LEARNING_RATE
@@ -151,6 +148,9 @@ def main():
     # --- START OF COMPATIBILITY PATCHES ---
     # 1. Patch Loss Criterion
     model.get_criterion = lambda: None
+
+    if model.tokenizer is not None:
+        model.tokenizer.use_phonemes = False
 
     # 2. Patch Speaker Manager
     if model.speaker_manager is not None:
