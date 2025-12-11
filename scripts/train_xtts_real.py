@@ -256,3 +256,40 @@ def main():
             latent_2d = self.fixed_speaker_latent.unsqueeze(0)
         else:
             latent_2d = self.fixed_speaker_latent
+            
+        batch_size = text_inputs.shape[0]
+        cond_latents_3d = latent_2d.unsqueeze(1).expand(batch_size, -1, -1)
+
+        # 4. Train GPT (Final Call)
+        outputs = self.gpt(
+            text_inputs=text_inputs,
+            text_lengths=text_lengths,
+            audio_codes=audio_codes,
+            wav_lengths=mel_lengths,
+            cond_mels=cond_latents_3d,   
+            cond_latents=cond_latents_3d 
+        )
+        
+        # 5. Extract and return loss
+        loss_text, loss_mel, mel_logits = outputs
+        total_loss = loss_text + loss_mel
+        
+        return outputs, {"loss": total_loss, "loss_text": loss_text, "loss_mel": loss_mel}
+
+    model.train_step = types.MethodType(patched_train_step, model)
+    # -------------------------------------------------------------------------
+
+    print("⏳ Loading data samples...")
+    train_samples = load_json_data(train_json)
+    eval_samples = load_json_data(eval_json)
+
+    trainer = Trainer(
+        TrainerArgs(restore_path=None, skip_train_epoch=False, start_with_eval=False),
+        config, output_path=OUT_PATH, model=model, train_samples=train_samples, eval_samples=eval_samples,   
+    )
+
+    print("🚀 Starting Training...")
+    trainer.fit()
+
+if __name__ == "__main__":
+    main()
