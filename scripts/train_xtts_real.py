@@ -44,9 +44,11 @@ def format_dataset(csv_file, train_json, eval_json):
             text = row[1].strip()
             audio_path = os.path.join(WAVS_DIR, audio_name)
             
+            # Create XTTS entry
             items.append({
                 "text": text,
                 "audio_file": audio_path,
+                "audio_unique_name": audio_name,  # <--- ADD THIS LINE
                 "speaker_name": SPEAKER_NAME,
                 "language": LANGUAGE
             })
