@@ -58,7 +58,7 @@ if hasattr(config.audio, 'frame_shift_ms'): delattr(config.audio, 'frame_shift_m
 
 model = Xtts.init_from_config(config)
 
-# 🛠️ TOKENIZER FIX: Manually instantiate with only the vocab_file argument
+# Manually instantiate tokenizer
 print("Manually loading VoiceBpeTokenizer...")
 model.tokenizer = VoiceBpeTokenizer(vocab_file=vocab_file)
 
@@ -104,19 +104,26 @@ try:
     mels = torch.from_numpy(mels_numpy).unsqueeze(0).to(device)
     
     with torch.no_grad():
-        # Get raw features [1, 1024, T]
-        speaker_embedding_features = model.gpt.get_conditioning(mels)
+        # Get raw features [1, 1024, 1] (Batch, Dim, Seq) - Wait, get_conditioning returns [B, 1024, 1] usually
+        latents = model.gpt.get_conditioning(mels) 
         
-        # Pool to [1024] vector
-        # mean over time (dim 2) -> [1, 1024], squeeze -> [1024]
-        latents = speaker_embedding_features.mean(dim=2, keepdim=False).squeeze(0)
-    
     # 🛠️ DIMENSION FIXES:
-    # 1. GPT Cond Latent needs to be 3D: [Batch, 1, Dim] -> [1, 1, 1024]
-    gpt_cond_latent = latents.unsqueeze(0).unsqueeze(0).to(device)
+    # 1. GPT Cond Latent: Needs to be [Batch, 1, 1024]
+    # latents is [1, 1024, 1]. We transpose to [1, 1, 1024]
+    gpt_cond_latent = latents.transpose(1, 2)
     
-    # 2. Speaker Embedding (for Vocoder) needs to be 2D: [Batch, Dim] -> [1, 1024]
-    speaker_embedding = latents.unsqueeze(0).to(device)
+    # 2. Speaker Embedding (for Vocoder): Needs to be [Batch, 512, 1]
+    # Check if we need to slice it from 1024 to 512 based on the error "expected 512 channels"
+    if latents.shape[1] == 1024:
+        # We assume the HifiGan expects the first 512 dimensions or a projection
+        # Given the error, we slice.
+        speaker_embedding = latents[:, :512, :]
+    else:
+        speaker_embedding = latents
+
+    # Ensure everything is on device
+    gpt_cond_latent = gpt_cond_latent.to(device)
+    speaker_embedding = speaker_embedding.to(device)
 
 except Exception as e:
     print(f"Fatal Error during latent generation: {e}")
