@@ -147,6 +147,10 @@ def main():
         # Silence print_logs to prevent AttributeError
         model.tokenizer.print_logs = lambda *args, **kwargs: None
 
+        # 🛠️ NEW FIX: Map 'text_to_ids' to the internal 'encode' method
+        # We hardcode the language here because the generic loader doesn't pass it.
+        model.tokenizer.text_to_ids = lambda t: model.tokenizer.encode(t, lang=LANGUAGE)
+
     # Patch 5: Config Attributes (Inject missing flags)
     config.model_args.use_speaker_embedding = True
     config.model_args.use_d_vector_file = False
