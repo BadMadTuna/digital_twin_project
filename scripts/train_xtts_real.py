@@ -16,7 +16,7 @@ from TTS.tts.datasets.formatters import *
 RUN_NAME = "xtts_finetuned"
 OUT_PATH = os.path.join(os.getcwd(), "models")
 METADATA_CSV = "metadata.csv"
-WAVS_DIR = "wavs"
+WAVS_DIR = "audio_data/dataset/wavs"
 LANGUAGE = "en"
 SPEAKER_NAME = "my_speaker"
 
