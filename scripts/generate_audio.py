@@ -20,7 +20,7 @@ CONFIG_PATH = os.path.join(MODEL_DIR, "config.json")
 
 REFERENCE_WAV_PATH = "audio_data/dataset/wavs/segment_0328.wav"
 OUTPUT_WAV_PATH = "output_fine_tuned_test.wav"
-TARGET_TEXT = "Do you have time to talk about Deep Resolve, our lord and savior? It is an absolute game changer for magnetic resonance imaging."
+TARGET_TEXT = "Isn't the Magnetom terra X a wonderful beast? Here we see it prey on smaller planets, such as jupiter."
 LANGUAGE = "en"
 
 # --------------------------------------------------------------------------
