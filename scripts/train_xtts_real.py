@@ -202,12 +202,11 @@ def main():
     print(f"   Using reference: {ref_audio_path}")
     
     wav = model.ap.load_wav(ref_audio_path)
+    
+    # 1. Convert WAV to PyTorch Tensor [1, 1, T]
     wav_tensor = torch.FloatTensor(wav).unsqueeze(0).unsqueeze(0)
     
-    if torch.cuda.is_available():
-        wav_tensor = wav_tensor.cuda()
-
-    # 1. Compute Mels
+    # 2. Convert PyTorch tensor to NumPy for melspectrogram call, then convert back to tensor
     wav_numpy = wav_tensor.squeeze().cpu().numpy() 
     mels_numpy = model.ap.melspectrogram(wav_numpy)
     mels = torch.from_numpy(mels_numpy).unsqueeze(0)
@@ -215,23 +214,21 @@ def main():
     if torch.cuda.is_available():
         mels = mels.cuda()
         
-    # 2. Get the 512-dimensional conditioned latent
+    # 3. Get the 512-dimensional conditioned latent
     with torch.no_grad():
-        # model.gpt.get_conditioning returns a 4D feature map (the cause of the crash)
         feature_map = model.gpt.get_conditioning(mels) 
         
-        # 3. GLOBAL AVERAGE POOLING FIX: Convert 4D map to 2D latent vector [B, D]
-        # [1, 1, 1024, 706] -> mean(dim=[2, 3]) -> [1, 1024]
-        # Then the GPT handles the final 1024 -> 512 projection internally.
-        speaker_latent = feature_map.mean(dim=[-2, -1]).squeeze(1)
+        # 🛠️ FINAL DIMENSIONAL FIX: Pool feature map [1, 1, C, T] -> [1, C]
+        # We average over the Time axis (dim -1 or 3) and the singleton channel axis (dim 1)
+        speaker_latent = feature_map.mean(dim=[-1, 1]).squeeze(1) 
         
         print(f"✅ Speaker Latent Computed: {speaker_latent.shape}")
         
-    # Store the 512-dimensional latent (it might be 1024, but the code will project it)
+    # Store the 512-dimensional latent
     model.fixed_speaker_latent = speaker_latent
 
     # -------------------------------------------------------------------------
-    # 🛠️ PATCH 7: CUSTOM GPT TRAINING STEP (ULTIMATE FIX)
+    # 🛠️ PATCH 7: CUSTOM GPT TRAINING STEP (FINAL CLEANUP)
     # -------------------------------------------------------------------------
     def patched_train_step(self, batch, criterion=None):
         text_inputs = batch.get("text_input")
@@ -247,7 +244,6 @@ def main():
             audio_codes = self.dvae.get_codebook_indices(mel_inputs_transposed)
 
         # 3. Use Pre-computed Speaker Latent
-        # FINAL DIMENSION FIX: Unsqueeze and expand the 512/1024-dim latent to 3D for concatenation [B, 1, D]
         batch_size = text_inputs.shape[0]
         cond_latents_3d = self.fixed_speaker_latent.unsqueeze(1).expand(batch_size, -1, -1)
 
@@ -264,6 +260,10 @@ def main():
         # 5. Extract and return loss
         loss_text, loss_mel, mel_logits = outputs
         total_loss = loss_text + loss_mel
+        
+        # We need to calculate the gradient, so ensure the outputs are not detached by being in a torch.no_grad block
+        # Loss must be calculated from outputs.
+        # Loss is calculated in the forward pass, so we trust it.
         
         return outputs, {"loss": total_loss, "loss_text": loss_text, "loss_mel": loss_mel}
 
