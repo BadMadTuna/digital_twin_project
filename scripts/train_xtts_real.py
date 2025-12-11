@@ -125,6 +125,10 @@ def main():
         )
     ]
 
+    # 🛠️ CRITICAL FIX 4: Inject missing config attribute
+    # The Trainer checks this flag to build the data loader, but XTTS config is missing it.
+    config.model_args.use_speaker_embedding = True
+
     config.batch_size = BATCH_SIZE
     config.epochs = EPOCHS
     config.lr = LEARNING_RATE
