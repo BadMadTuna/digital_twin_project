@@ -187,7 +187,7 @@ def main():
     resurrect_dvae(model, CHECKPOINT_DIR)
 
     # -------------------------------------------------------------------------
-    # 🛠️ PRE-COMPUTE SPEAKER LATENT (The "Constant Latent" Strategy)
+    # 🛠️ PRE-COMPUTE SPEAKER LATENT (FINAL DIMENSION FIX)
     # -------------------------------------------------------------------------
     print("⏳ Pre-computing speaker latent from reference audio...")
     ref_audio_path = None
@@ -207,14 +207,24 @@ def main():
     if torch.cuda.is_available():
         wav_tensor = wav_tensor.cuda()
 
+    # Get Mels [1, 80, T]
+    mels = model.ap.melspectrogram(wav_tensor).squeeze(0) # [80, T]
+    mels = mels.unsqueeze(0) # [1, 80, T]
+    
+    if torch.cuda.is_available():
+        mels = mels.cuda()
+        
+    # Get the 512-dimensional conditioned latent
     with torch.no_grad():
-        speaker_latent = model.hifigan_decoder.speaker_encoder(wav_tensor)
+        # model.gpt.get_conditioning handles the ResNet and projection down to 512
+        speaker_latent = model.gpt.get_conditioning(mels) 
         print(f"✅ Speaker Latent Computed: {speaker_latent.shape}")
         
+    # Store the 512-dimensional latent
     model.fixed_speaker_latent = speaker_latent
 
     # -------------------------------------------------------------------------
-    # 🛠️ PATCH 7: CUSTOM GPT TRAINING STEP (Final Dimension Fix)
+    # 🛠️ PATCH 7: CUSTOM GPT TRAINING STEP (ULTIMATE FIX)
     # -------------------------------------------------------------------------
     def patched_train_step(self, batch, criterion=None):
         text_inputs = batch.get("text_input")
@@ -222,7 +232,7 @@ def main():
         mel_inputs = batch.get("mel_input")
         mel_lengths = batch.get("mel_lengths")
 
-        # 1. TRANSPOSE: [B, T, C] -> [B, C, T]
+        # 1. TRANSPOSE: [B, T, C] -> [B, C, T] for DVAE
         mel_inputs_transposed = mel_inputs.transpose(1, 2)
 
         # 2. Compute Codes
@@ -230,22 +240,26 @@ def main():
             audio_codes = self.dvae.get_codebook_indices(mel_inputs_transposed)
 
         # 3. Use Pre-computed Speaker Latent
-        # 🛠️ FINAL DIMENSION FIX: Add the missing Sequence dimension (T=1)
+        # 🛠️ FINAL DIMENSION FIX: Unsqueeze and expand the 512-dim latent to 3D for concatenation [B, 1, D]
         batch_size = text_inputs.shape[0]
         cond_latents_3d = self.fixed_speaker_latent.unsqueeze(1).expand(batch_size, -1, -1)
 
         # 4. Train GPT (Final Call)
-        # Note: We pass the 3D latent tensor under the name 'cond_mels' to satisfy the masking bug,
-        # and as 'cond_latents' to satisfy the data input.
+        # Note: We double-pass the 3D latent tensor to satisfy the masking bug and data input requirements.
         outputs = self.gpt(
             text_inputs=text_inputs,
             text_lengths=text_lengths,
             audio_codes=audio_codes,
             wav_lengths=mel_lengths,
-            cond_mels=cond_latents_3d,   # FIX: Satisfy the bug's shape check
-            cond_latents=cond_latents_3d # FIX: Pass the 3D tensor to the latent argument
+            cond_mels=cond_latents_3d,   
+            cond_latents=cond_latents_3d 
         )
-        return outputs, outputs
+        
+        # 5. Extract and return loss
+        loss_text, loss_mel, mel_logits = outputs
+        total_loss = loss_text + loss_mel
+        
+        return outputs, {"loss": total_loss, "loss_text": loss_text, "loss_mel": loss_mel}
 
     model.train_step = types.MethodType(patched_train_step, model)
     # -------------------------------------------------------------------------
