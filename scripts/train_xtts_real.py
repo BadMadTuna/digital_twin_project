@@ -27,8 +27,8 @@ SPEAKER_NAME = "my_speaker"
 BATCH_SIZE = 2 
 EPOCHS = 10
 LEARNING_RATE = 5e-6
-# 🛠️ CRITICAL FIX: Ensure checkpoints are saved frequently
-SAVE_STEP = 1000 
+# 🛠️ CHECKPOINT FREQUENCY: Save every 500 steps
+SAVE_STEP = 500 
 
 # -------------------------------------------------------------------------
 # DATA HELPERS
@@ -154,6 +154,9 @@ def main():
     config.lr = LEARNING_RATE
     config.output_path = OUT_PATH
     config.run_name = RUN_NAME
+    
+    # 🛠️ CRITICAL FIX: Set save_step here on the config object
+    config.save_step = SAVE_STEP
 
     print("⬇️  Loading XTTS v2 Base Model...")
     model = Xtts.init_from_config(config)
@@ -280,14 +283,8 @@ def main():
     train_samples = load_json_data(train_json)
     eval_samples = load_json_data(eval_json)
 
-    # 🛠️ CRITICAL FIX: Pass SAVE_STEP to TrainerArgs
     trainer = Trainer(
-        TrainerArgs(
-            restore_path=None, 
-            skip_train_epoch=False, 
-            start_with_eval=False,
-            save_step=SAVE_STEP # <-- FORCE PERIODIC SAVING
-        ),
+        TrainerArgs(restore_path=None, skip_train_epoch=False, start_with_eval=False),
         config, output_path=OUT_PATH, model=model, train_samples=train_samples, eval_samples=eval_samples,   
     )
 
@@ -295,6 +292,4 @@ def main():
     trainer.fit()
 
 if __name__ == "__main__":
-    # Note: This is an incomplete wrapper to provide the code, 
-    # the user must manually integrate the helper functions.
     main()
