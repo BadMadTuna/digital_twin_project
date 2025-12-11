@@ -4,6 +4,7 @@ import json
 import random
 import torch
 import types
+import sys
 from TTS.utils.manage import ModelManager
 from TTS.utils.audio import AudioProcessor
 from trainer import Trainer, TrainerArgs
@@ -26,7 +27,7 @@ EPOCHS = 10
 LEARNING_RATE = 5e-6
 
 # -------------------------------------------------------------------------
-# DATA FORMATTING
+# DATA HELPERS
 # -------------------------------------------------------------------------
 def format_dataset(csv_file, train_json, eval_json):
     if not os.path.exists(csv_file): raise FileNotFoundError(f"❌ Could not find {csv_file}")
@@ -61,35 +62,75 @@ def load_json_data(json_file):
     return data
 
 # -------------------------------------------------------------------------
-# 🔍 SEARCH UTILITY: FIND VQGAN
+# 🛠️ RESURRECTION UTILITY: REBUILD MISSING VQGAN
 # -------------------------------------------------------------------------
-def find_vqgan_in_model(model):
-    """Recursively searches for the VQGAN/DVAE module."""
-    print("🔍 Searching for VQGAN/DVAE in model...")
+def resurrect_dvae(model, checkpoint_dir):
+    """
+    Manually instantiates and loads the DVAE (VQGAN) module.
+    This is necessary because inference-optimized Xtts objects often skip loading the Encoder.
+    """
+    print("✨ Attempting to resurrect missing VQGAN/DVAE...")
     
-    # 1. Check known locations
-    if hasattr(model, "hifigan_decoder") and hasattr(model.hifigan_decoder, "vqgan"):
-        return model.hifigan_decoder.vqgan
-    if hasattr(model, "dvae"):
-        return model.dvae
+    # 1. Try to import the class (Tortoise DVAE is standard for XTTS v2)
+    try:
+        from TTS.tts.layers.tortoise.dvae import DiscreteVAE
+    except ImportError:
+        try:
+            from TTS.tts.models.xtts.dvae import DiscreteVAE
+        except ImportError:
+            print("❌ Could not import DiscreteVAE class. Cannot train.")
+            sys.exit(1)
+
+    # 2. Instantiate the DVAE with standard XTTS settings
+    # These are hardcoded defaults for XTTS v2
+    dvae = DiscreteVAE(
+        channels=80, 
+        normalization=None, 
+        positional_dims=1, 
+        num_tokens=1024, 
+        codebook_dim=512, 
+        hidden_dim=512, 
+        num_resnet_blocks=3, 
+        kernel_size=3, 
+        num_layers=2
+    )
+    
+    # 3. Load weights from the main model checkpoint
+    # We look for 'model.pth' in the checkpoint dir
+    model_path = os.path.join(checkpoint_dir, "model.pth")
+    if not os.path.exists(model_path):
+        print(f"❌ Could not find model.pth in {checkpoint_dir}")
+        sys.exit(1)
         
-    # 2. Recursive Search (Depth-First)
-    for name, module in model.named_modules():
-        # Check for common names
-        if name.endswith("vqgan") or name.endswith("dvae"):
-            print(f"✅ Found VQGAN at: {name}")
-            return module
-        # Check for signature method 'encode' and 'codebook' property
-        if hasattr(module, "encode") and hasattr(module, "codebook"):
-            print(f"✅ Found VQGAN (by signature) at: {name}")
-            return module
+    print(f"   Loading weights from {model_path}...")
+    full_state_dict = torch.load(model_path, map_location="cpu")
+    
+    # The keys in the main checkpoint usually start with "dvae."
+    # We need to strip that prefix to load it into the isolated DVAE object.
+    dvae_state_dict = {}
+    for key, value in full_state_dict.items():
+        if key.startswith("dvae."):
+            new_key = key.replace("dvae.", "")
+            dvae_state_dict[new_key] = value
+            
+    if not dvae_state_dict:
+        print("❌ No 'dvae.' keys found in checkpoint. The VQGAN weights are missing.")
+        sys.exit(1)
+        
+    # 4. Load the state dict
+    try:
+        dvae.load_state_dict(dvae_state_dict)
+        print("✅ DVAE weights loaded successfully.")
+    except Exception as e:
+        print(f"❌ Failed to load DVAE weights: {e}")
+        sys.exit(1)
 
-    # 3. Last Resort: Check if hifigan_decoder IS the vqgan (unlikely but possible)
-    if hasattr(model, "hifigan_decoder") and hasattr(model.hifigan_decoder, "encode"):
-         return model.hifigan_decoder
-
-    print("❌ VQGAN NOT FOUND. Training will likely fail.")
-    return None
+    # 5. Move to GPU if needed and attach to model
+    if torch.cuda.is_available():
+        dvae = dvae.cuda()
+        
+    model.dvae = dvae
+    return model.dvae
 
 # -------------------------------------------------------------------------
 # MAIN
@@ -135,47 +176,33 @@ def main():
     if model.ap is None:
         model.ap = AudioProcessor(sample_rate=22050, num_mels=80, do_trim_silence=True, n_fft=1024, win_length=1024, hop_length=256)
 
-    # 🛠️ FIND AND BIND VQGAN
-    # We find the missing component and attach it to 'model.found_vqgan'
-    model.found_vqgan = find_vqgan_in_model(model)
+    # 🛠️ RESURRECT DVAE (VQGAN)
+    # This attaches 'model.dvae' to the object
+    resurrect_dvae(model, CHECKPOINT_DIR)
 
     # -------------------------------------------------------------------------
     # 🛠️ PATCH 7: CUSTOM GPT TRAINING STEP
     # -------------------------------------------------------------------------
     def patched_train_step(self, batch, criterion=None):
-        # 1. Prepare Data Keys
+        # 1. Unpack Batch
         text_inputs = batch.get("text_input")
         text_lengths = batch.get("text_lengths")
         mel_inputs = batch.get("mel_input")
         mel_lengths = batch.get("mel_lengths")
 
-        # 2. Get Audio Codes (Using our discovered VQGAN)
-        if self.found_vqgan is None:
-             raise RuntimeError("Cannot train: VQGAN/DVAE not found in model.")
-             
+        # 2. Compute Audio Codes using our resurrected DVAE
         with torch.no_grad():
-            # Run encoder
-            # Note: The signature of encode() might vary. Usually returns (z, loss, info).
-            # info[2] is the indices (codes).
-            ret = self.found_vqgan.encode(mel_inputs)
-            
-            # Robust extraction of codes:
-            if isinstance(ret, tuple) and len(ret) == 3:
-                # Standard Coqui VQGAN returns (z, quant_loss, (perplexity, min_encodings, INDICES))
-                audio_codes = ret[2][2] 
-            elif isinstance(ret, tuple) and len(ret) > 0:
-                 # Fallback guess: typically the last item or the indices tensor
-                 audio_codes = ret[-1]
-            else:
-                 # If it just returns codes
-                 audio_codes = ret
-                 
-        # 3. Get Conditioning Latents
+            # encode() returns (z, loss, info). info[2] contains the indices (codes).
+            # We call the DVAE we just attached.
+            _, _, info = self.dvae.encode(mel_inputs)
+            audio_codes = info[2] # [B, T]
+
+        # 3. Compute Conditioning Latents
         with torch.no_grad():
             if hasattr(self, "speaker_encoder"):
                 cond_latents = self.speaker_encoder(mel_inputs)
             else:
-                # Try hifigan decoder as fallback
+                # Fallback to hifigan decoder if speaker_encoder is merged there
                 cond_latents = self.hifigan_decoder(mel_inputs, return_latents=True)
 
         # 4. Train GPT
