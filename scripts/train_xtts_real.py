@@ -4,8 +4,6 @@ import json
 import random
 import torch
 import types
-import inspect
-import sys
 from TTS.utils.manage import ModelManager
 from TTS.utils.audio import AudioProcessor
 from trainer import Trainer, TrainerArgs
@@ -176,42 +174,22 @@ def main():
             hop_length=256
         )
 
-    # -------------------------------------------------------------------------
-    # 🔍 DEBUG: INSPECT TRAIN_STEP SIGNATURE
-    # -------------------------------------------------------------------------
-    print("\n" + "="*50)
-    print("🔍 INSPECTING MODEL METHODS")
-    print("="*50)
-    
-    # 1. Check if train_step exists
-    if hasattr(model, "train_step"):
-        print(f"✅ model.train_step exists.")
+    # Patch 7: Train Step (Bypass Patch)
+    # The original train_step is broken (accepts 0 arguments).
+    # We replace it with a function that calls forward() directly.
+    def patched_train_step(self, batch, criterion=None):
+        # We assume 'batch' contains exactly what the model expects.
+        # We pass it as kwargs to the forward pass.
+        outputs = self.forward(**batch)
         
-        # 2. Get the actual function
-        original_method = model.train_step
-        print(f"   Type: {type(original_method)}")
-        
-        # 3. Print the signature (arguments it expects)
-        try:
-            sig = inspect.signature(original_method)
-            print(f"   Signature: {sig}")
-        except Exception as e:
-            print(f"   Could not get signature: {e}")
-
-        # 4. Check for 'forward' just in case
-        if hasattr(model, "forward"):
-             try:
-                print(f"   model.forward signature: {inspect.signature(model.forward)}")
-             except:
-                pass
-    else:
-        print("❌ model.train_step DOES NOT EXIST.")
-
-    print("="*50 + "\n")
+        # Trainer expects (outputs, loss_dict).
+        # XTTS output is a dictionary that includes losses, so we return it for both.
+        return outputs, outputs
     
-    # Stop here so we don't clear the logs with a crash later
-    sys.exit("⛔ Stopping for inspection.")
-    # -------------------------------------------------------------------------
+    # Bind the new method to the instance
+    model.train_step = types.MethodType(patched_train_step, model)
+    
+    # =========================================================================
 
     # 5. Load Data
     print("⏳ Loading data samples...")
