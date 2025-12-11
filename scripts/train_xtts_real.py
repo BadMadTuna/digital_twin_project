@@ -153,9 +153,15 @@ def main():
     config.model_args.use_language_embedding = False
 
     # Patch 6: Audio Processor
-    # The dataset loader relies on this to read WAV files.
+    # We explicitly provide FFT settings to prevent the "NoneType" division error.
     if model.ap is None:
-        model.ap = AudioProcessor(sample_rate=22050)
+        model.ap = AudioProcessor(
+            sample_rate=22050,
+            win_length=1024,
+            hop_length=256,
+            n_fft=1024,
+            do_trim_silence=True
+        )
     
     # =========================================================================
 
