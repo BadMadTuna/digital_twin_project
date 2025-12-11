@@ -174,32 +174,20 @@ def main():
             hop_length=256
         )
 
-    # Patch 7: Train Step (Smart Filter)
-    # The original train_step is broken. We replace it with a robust function that:
-    # 1. Inspects the model.forward() signature to see what it accepts.
-    # 2. Filters the batch to remove extra keys (like 'audio_unique_name') that cause crashes.
-    # 3. Renames keys like 'text_input' -> 'text_inputs'.
-    
-    import inspect
-    
+    # Patch 7: Train Step (Targeting GPT Logic)
+    # The standard forward() is blocked. We must call the specific GPT training method.
     def patched_train_step(self, batch, criterion=None):
-        # 1. Key Mapping: Fix known mismatches
+        # 1. Key Mapping: Fix generic keys to what XTTS expects
         if "text_input" in batch:
             batch["text_inputs"] = batch.pop("text_input")
+        if "text_lengths" in batch:
+            batch["text_lengths"] = batch.pop("text_lengths")
+        if "audio_lengths" in batch:
+            batch["audio_lengths"] = batch.pop("audio_lengths")
             
-        # 2. Smart Filtering: Only pass arguments that forward() actually accepts
-        forward_params = inspect.signature(self.forward).parameters
-        
-        # Create a new dict with ONLY the keys that exist in forward_params
-        filtered_batch = {
-            k: v for k, v in batch.items() 
-            if k in forward_params
-        }
-        
-        # 3. Call forward with the clean batch
-        outputs = self.forward(**filtered_batch)
-        
-        return outputs, outputs
+        # 2. Call the specific GPT training logic
+        # This calculates the loss for the language model part of XTTS.
+        return self.gpt_train_step(batch)
     
     # Bind the new method to the instance
     model.train_step = types.MethodType(patched_train_step, model)
