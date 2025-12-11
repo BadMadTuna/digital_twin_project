@@ -159,6 +159,7 @@ def main():
             sample_rate=22050,
             win_length=1024,
             hop_length=256,
+            num_mels=80,
             n_fft=1024,
             do_trim_silence=True
         )
