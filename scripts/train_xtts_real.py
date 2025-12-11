@@ -138,7 +138,13 @@ def main():
     # Patch 2: Speaker Manager
     if model.speaker_manager is not None:
         model.speaker_manager.save_ids_to_file = lambda x: None
-        model.speaker_manager._name_to_id = {SPEAKER_NAME: 0}
+        
+        # 🛠️ NUCLEAR FIX: Delete the class property so we can set a simple dict
+        # This resolves the "can't set attribute" and "dict_keys" errors once and for all.
+        if hasattr(type(model.speaker_manager), "name_to_id"):
+            delattr(type(model.speaker_manager), "name_to_id")
+            
+        model.speaker_manager.name_to_id = {SPEAKER_NAME: 0}
 
     # Patch 3: Language Manager
     if model.language_manager is not None:
