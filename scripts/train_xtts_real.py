@@ -25,7 +25,7 @@ WAVS_DIR = "audio_data/dataset/wavs"
 LANGUAGE = "en"
 SPEAKER_NAME = "my_speaker"
 BATCH_SIZE = 2 
-EPOCHS = 10
+EPOCHS = 15
 LEARNING_RATE = 5e-6
 # 🛠️ CHECKPOINT FREQUENCY: Save every 500 steps
 SAVE_STEP = 500 
