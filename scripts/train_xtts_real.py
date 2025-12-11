@@ -7,6 +7,7 @@ from TTS.tts.configs.shared_configs import BaseDatasetConfig
 from TTS.tts.configs.xtts_config import XttsConfig
 from TTS.tts.models.xtts import Xtts
 from TTS.tts.datasets.formatters import *
+from TTS.utils.manage import ModelManager
 
 # -------------------------------------------------------------------------
 # CONFIGURATION & PATHS
