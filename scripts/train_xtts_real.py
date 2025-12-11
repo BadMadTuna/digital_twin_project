@@ -4,7 +4,6 @@ import json
 import random
 import torch
 import types
-import inspect
 import sys
 from TTS.utils.manage import ModelManager
 from TTS.utils.audio import AudioProcessor
@@ -28,11 +27,10 @@ EPOCHS = 10
 LEARNING_RATE = 5e-6
 
 # -------------------------------------------------------------------------
-# HELPERS
+# SETUP HELPERS
 # -------------------------------------------------------------------------
 def format_dataset(csv_file, train_json, eval_json):
     if not os.path.exists(csv_file): raise FileNotFoundError(f"❌ Could not find {csv_file}")
-    print("Converting metadata.csv to XTTS JSON format...")
     items = []
     with open(csv_file, 'r', encoding='utf-8') as f:
         reader = csv.reader(f, delimiter='|')
@@ -47,9 +45,8 @@ def format_dataset(csv_file, train_json, eval_json):
                 "language": LANGUAGE
             })
     random.shuffle(items)
-    split_idx = int(len(items) * 0.9)
-    train_items = items[:split_idx]
-    eval_items = items[split_idx:]
+    train_items = items[:int(len(items)*0.9)]
+    eval_items = items[int(len(items)*0.9):]
     with open(train_json, "w", encoding="utf-8") as f:
         for item in train_items: f.write(json.dumps(item) + "\n")
     with open(eval_json, "w", encoding="utf-8") as f:
@@ -85,8 +82,8 @@ def main():
 
     print("⬇️  Loading XTTS v2 Base Model...")
     model = Xtts.init_from_config(config)
+    # Important: Load checkpoint but don't move to GPU yet so we can inspect easily
     model.load_checkpoint(config, checkpoint_dir=CHECKPOINT_DIR, eval=True)
-    if torch.cuda.is_available(): model.cuda()
 
     # --- PATCHES ---
     model.get_criterion = lambda: None
@@ -107,52 +104,34 @@ def main():
         model.ap = AudioProcessor(sample_rate=22050, num_mels=80, do_trim_silence=True, n_fft=1024, win_length=1024, hop_length=256)
 
     # -------------------------------------------------------------------------
-    # 🔍 DIAGNOSTIC: FIND VQGAN / ENCODER
+    # 🔍 SEARCH PARTY: RECURSIVE MODULE INSPECTION
     # -------------------------------------------------------------------------
-    def patched_train_step(self, batch, criterion=None):
-        print("\n" + "="*50)
-        print("🔍 INSPECTING HIFIGAN DECODER")
-        print("="*50)
+    print("\n" + "="*50)
+    print("🔍 INSPECTING MODEL SUB-MODULES")
+    print("="*50)
+    
+    print("1. Direct Children of 'model':")
+    for name, module in model.named_children():
+        print(f"   - {name}: {type(module).__name__}")
         
-        # 1. Print attributes of hifigan_decoder
-        if hasattr(self, "hifigan_decoder"):
-            print("✅ self.hifigan_decoder EXISTS")
-            print("   Attributes:")
-            for attr in dir(self.hifigan_decoder):
-                if not attr.startswith("__"):
-                    print(f"   - {attr}")
-        else:
-            print("❌ self.hifigan_decoder MISSING")
+    print("\n2. Direct Children of 'model.hifigan_decoder':")
+    if hasattr(model, "hifigan_decoder"):
+        for name, module in model.hifigan_decoder.named_children():
+            print(f"   - {name}: {type(module).__name__}")
+    else:
+        print("   (hifigan_decoder missing)")
 
-        print("\n" + "="*50)
-        print("🔍 INSPECTING GPT")
-        print("="*50)
-        
-        # 2. Print attributes of gpt
-        if hasattr(self, "gpt"):
-            print("✅ self.gpt EXISTS")
-            print("   Attributes:")
-            for attr in dir(self.gpt):
-                if not attr.startswith("__"):
-                    print(f"   - {attr}")
+    print("\n3. Direct Children of 'model.gpt':")
+    if hasattr(model, "gpt"):
+        for name, module in model.gpt.named_children():
+            print(f"   - {name}: {type(module).__name__}")
+            
+    print("="*50 + "\n")
+    sys.exit("⛔ Stopping for inspection.")
 
-        print("="*50 + "\n")
-        sys.exit("⛔ Stopping for inspection.")
-
-    model.train_step = types.MethodType(patched_train_step, model)
     # -------------------------------------------------------------------------
-
-    print("⏳ Loading data samples...")
-    train_samples = load_json_data(train_json)
-    eval_samples = load_json_data(eval_json)
-
-    trainer = Trainer(
-        TrainerArgs(restore_path=None, skip_train_epoch=False, start_with_eval=False),
-        config, output_path=OUT_PATH, model=model, train_samples=train_samples, eval_samples=eval_samples,   
-    )
-
-    print("🚀 Starting Training...")
-    trainer.fit()
+    # (Rest of training code omitted for inspection)
+    # -------------------------------------------------------------------------
 
 if __name__ == "__main__":
     main()
