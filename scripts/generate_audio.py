@@ -6,6 +6,7 @@ from TTS.tts.configs.xtts_config import XttsConfig
 from TTS.tts.models.xtts import Xtts
 from TTS.utils.audio import AudioProcessor
 
+# --------------------------------------------------------------------------
 # --- CONFIGURATION ---
 # Target the directory from your last successful run
 MODEL_DIR = "/home/ubuntu/digital_twin_project/models/xtts_finetuned-December-11-2025_01+15PM-3e81100"
@@ -19,6 +20,7 @@ OUTPUT_WAV_PATH = "output_fine_tuned_test.wav"
 TARGET_TEXT = "Hello Gemini, this is the voice I just trained. I hope it sounds clear and natural."
 LANGUAGE = "en"
 
+# --------------------------------------------------------------------------
 # --- EXECUTION ---
 if not os.path.exists(MODEL_CHECKPOINT_PATH):
     print(f"Error: Model checkpoint not found at {MODEL_CHECKPOINT_PATH}")
@@ -31,9 +33,15 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Loading model architecture...")
 config = XttsConfig()
 config.load_json(CONFIG_PATH)
+
+# 🛠️ CRITICAL FIX: Delete conflicting millisecond attributes from config.audio
+if hasattr(config.audio, 'frame_length_ms'): delattr(config.audio, 'frame_length_ms')
+if hasattr(config.audio, 'frame_shift_ms'): delattr(config.audio, 'frame_shift_ms')
+
+
 model = Xtts.init_from_config(config)
 
-# 2. Load Weights
+# 2. Load Weights (Using manual load logic)
 print(f"Loading weights from {MODEL_CHECKPOINT_PATH}...")
 checkpoint = torch.load(MODEL_CHECKPOINT_PATH, map_location=device)
 state_dict = checkpoint.get("model", checkpoint)
@@ -43,9 +51,9 @@ print("✅ Model weights loaded successfully.")
 model.to(device)
 model.eval()
 
-# 3. Initialize Audio Processor (The Final Stabilization Fix)
+# 3. Initialize Audio Processor (Cleaned Configuration)
 print("Initializing AudioProcessor...")
-# CRITICAL FIX: Filter out all None values to prevent division by None error
+# Convert to dict, filtering out all None values to prevent division errors
 audio_config_dict = {k: v for k, v in config.audio.to_dict().items() if v is not None}
 
 ap = AudioProcessor(**audio_config_dict)
@@ -64,7 +72,6 @@ try:
     
     with torch.no_grad():
         speaker_embedding = model.gpt.get_conditioning(mels)
-        # Average over time axis (dim 2) and remove singleton batch dim (dim 1)
         gpt_cond_latent = speaker_embedding.mean(dim=2, keepdim=False).squeeze(0)
     
     # Prepare tensors for generation
