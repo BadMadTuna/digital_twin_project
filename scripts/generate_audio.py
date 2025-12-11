@@ -34,11 +34,19 @@ print("Loading model architecture...")
 config = XttsConfig()
 config.load_json(CONFIG_PATH)
 
-# --- FINAL FIX: Patch 1 (No Millisecond Configs) ---
-# We delete the millisecond attributes entirely from the Coqpit object 
-# to ensure AudioProcessor relies on the sample-based parameters.
+# --- FINAL FIX: Patch 1 (Injecting Calculated Millisecond Values) ---
+# Calculate the sample-to-millisecond values based on fixed parameters
+SR = config.audio.sample_rate
+WL = config.audio.win_length
+HL = config.audio.hop_length
+
+frame_length_ms = WL * 1000 / SR
+frame_shift_ms = HL * 1000 / SR
+
+# 🛠️ CRITICAL FIX: Delete the original None attributes and replace with calculated floats
 if hasattr(config.audio, 'frame_length_ms'): delattr(config.audio, 'frame_length_ms')
 if hasattr(config.audio, 'frame_shift_ms'): delattr(config.audio, 'frame_shift_ms')
+
 
 model = Xtts.init_from_config(config)
 
@@ -52,15 +60,17 @@ print("✅ Model weights loaded successfully.")
 model.to(device)
 model.eval()
 
-# 3. Initialize Audio Processor (Explicit Arguments Fix)
+# 3. Initialize Audio Processor (Stabilized Configuration)
 print("Initializing AudioProcessor...")
-
-# Get the cleaned dictionary after the deletions above
+# Convert to dict, filtering out all None values that might linger
 audio_config_dict = {k: v for k, v in config.audio.to_dict().items() if v is not None}
 
-# Initialize with only the necessary, non-None parameters.
+# Inject the calculated, non-None millisecond values
+audio_config_dict["frame_length_ms"] = frame_length_ms
+audio_config_dict["frame_shift_ms"] = frame_shift_ms
+
 ap = AudioProcessor(**audio_config_dict)
-ap.sample_rate = config.audio.sample_rate 
+ap.sample_rate = config.audio.sample_rate
 
 # 4. Generate Speaker Latent
 print("Generating speaker latent...")
