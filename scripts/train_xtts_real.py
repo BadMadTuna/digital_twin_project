@@ -4,12 +4,12 @@ import json
 import random
 import torch
 from TTS.utils.manage import ModelManager
+from TTS.utils.audio import AudioProcessor
 from trainer import Trainer, TrainerArgs
 from TTS.tts.configs.shared_configs import BaseDatasetConfig
 from TTS.tts.configs.xtts_config import XttsConfig
 from TTS.tts.models.xtts import Xtts
 from TTS.tts.datasets.formatters import *
-from TTS.utils.audio import AudioProcessor
 
 # -------------------------------------------------------------------------
 # CONFIGURATION & PATHS
@@ -17,12 +17,15 @@ from TTS.utils.audio import AudioProcessor
 RUN_NAME = "xtts_finetuned"
 OUT_PATH = os.path.join(os.getcwd(), "models")
 METADATA_CSV = "metadata.csv"
-WAVS_DIR = "audio_data/dataset/wavs"
+
+# 🛠️ FIX: Relative path to your actual audio files
+WAVS_DIR = "audio_data/dataset/wavs" 
+
 LANGUAGE = "en"
 SPEAKER_NAME = "my_speaker"
 
 # Training Hyperparameters
-BATCH_SIZE = 4  # Set to 2 if you hit OutOfMemory errors
+BATCH_SIZE = 2  # Set to 2 to be safe against OOM
 EPOCHS = 10
 LEARNING_RATE = 5e-6
 
@@ -44,15 +47,16 @@ def format_dataset(csv_file, train_json, eval_json):
             text = row[1].strip()
             audio_path = os.path.join(WAVS_DIR, audio_name)
             
-            # Create XTTS entry
+            # 🛠️ FIX: Add 'audio_unique_name' for the dataset loader
             items.append({
                 "text": text,
                 "audio_file": audio_path,
-                "audio_unique_name": audio_name,  # <--- ADD THIS LINE
+                "audio_unique_name": audio_name, 
                 "speaker_name": SPEAKER_NAME,
                 "language": LANGUAGE
             })
 
+    # Shuffle and Split
     random.shuffle(items)
     split_idx = int(len(items) * 0.9)
     train_items = items[:split_idx]
@@ -126,24 +130,26 @@ def main():
     print("⬇️  Loading XTTS v2 Base Model...")
     model = Xtts.init_from_config(config)
     model.load_checkpoint(config, checkpoint_dir=CHECKPOINT_DIR, eval=True)
-    model.to("cuda" if torch.cuda.is_available() else "cpu")
+    if torch.cuda.is_available():
+        model.cuda()
 
     # =========================================================================
     # 🛠️ COMPATIBILITY PATCHES (Monkey-Patching)
+    # The Generic Trainer is not natively compatible with XTTS v2.
+    # We apply these patches to bridge the gap.
     # =========================================================================
     
     # Patch 1: Loss Criterion
+    # XTTS calculates loss internally; generic trainer expects an external function.
     model.get_criterion = lambda: None
 
-    # Patch 2: Speaker Manager
+    # Patch 2: Speaker Manager (Nuclear Fix)
+    # Force a simple dictionary mapping to satisfy the dataset loader.
     if model.speaker_manager is not None:
         model.speaker_manager.save_ids_to_file = lambda x: None
-        
-        # 🛠️ NUCLEAR FIX: Delete the class property so we can set a simple dict
-        # This resolves the "can't set attribute" and "dict_keys" errors once and for all.
+        # Delete class property to allow overwriting with a simple dict
         if hasattr(type(model.speaker_manager), "name_to_id"):
             delattr(type(model.speaker_manager), "name_to_id")
-            
         model.speaker_manager.name_to_id = {SPEAKER_NAME: 0}
 
     # Patch 3: Language Manager
@@ -151,40 +157,40 @@ def main():
         model.language_manager.save_ids_to_file = lambda x: None
 
     # Patch 4: Tokenizer
+    # XTTS uses BPE, not phonemes. We silence logs and map text_to_ids to encode.
     if model.tokenizer is not None:
         model.tokenizer.use_phonemes = False
-        # Silence print_logs to prevent AttributeError
         model.tokenizer.print_logs = lambda *args, **kwargs: None
-
-        # 🛠️ NEW FIX: Map 'text_to_ids' to the internal 'encode' method
-        # We hardcode the language here because the generic loader doesn't pass it.
         model.tokenizer.text_to_ids = lambda t: model.tokenizer.encode(t, lang=LANGUAGE)
 
-    # Patch 5: Config Attributes (Inject missing flags)
+    # Patch 5: Config Attributes
+    # Inject missing flags that the generic Trainer checks for.
     config.model_args.use_speaker_embedding = True
     config.model_args.use_d_vector_file = False
     config.model_args.use_language_embedding = False
-
-    config.r = 1
+    config.r = 1  # Reduction factor (Legacy param, set to 1 for XTTS)
 
     # Patch 6: Audio Processor
-    # We explicitly provide FFT settings to prevent the "NoneType" division error.
+    # Initialize with specific FFT settings to prevent division-by-zero errors.
     if model.ap is None:
         model.ap = AudioProcessor(
             sample_rate=22050,
-            win_length=1024,
-            hop_length=256,
             num_mels=80,
+            do_trim_silence=True,
             n_fft=1024,
-            do_trim_silence=True
+            win_length=1024,
+            hop_length=256
         )
-    
-    # Patch 7: Train Step Signature
-    # The Trainer passes 'criterion' to the model, but XTTS only accepts 'batch'.
-    # We wrap the function to simply discard the extra 'criterion' argument.
-    _original_train_step = model.train_step
-    model.train_step = lambda batch, criterion=None: _original_train_step(batch)
 
+    # Patch 7: Train Step (Class-Level Patch)
+    # Wrap the train_step method to accept (and ignore) the 'criterion' argument.
+    if not hasattr(Xtts, "_original_train_step"):
+        Xtts._original_train_step = Xtts.train_step
+        
+    def patched_train_step(self, batch, criterion=None):
+        return self._original_train_step(batch)
+    
+    Xtts.train_step = patched_train_step
     # =========================================================================
 
     # 5. Load Data manually to avoid internal loader errors
@@ -202,8 +208,8 @@ def main():
         config,
         output_path=OUT_PATH,
         model=model,
-        train_samples=train_samples, # Explicitly pass data
-        eval_samples=eval_samples,   # Explicitly pass data
+        train_samples=train_samples, 
+        eval_samples=eval_samples,   
     )
 
     # 7. Start Training
