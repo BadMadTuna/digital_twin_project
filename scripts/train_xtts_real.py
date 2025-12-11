@@ -138,6 +138,7 @@ def main():
     # Patch 2: Speaker Manager
     if model.speaker_manager is not None:
         model.speaker_manager.save_ids_to_file = lambda x: None
+        model.speaker_manager.name_to_id = {SPEAKER_NAME: 0}
 
     # Patch 3: Language Manager
     if model.language_manager is not None:
