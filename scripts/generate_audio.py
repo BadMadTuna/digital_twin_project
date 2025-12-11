@@ -32,6 +32,10 @@ manager = ModelManager()
 model_path_tuple = manager.download_model("tts_models/multilingual/multi-dataset/xtts_v2")
 BASE_MODEL_DIR = os.path.dirname(model_path_tuple[0])
 
+# Construct file paths for the tokenizer
+VOCAB_FILE = os.path.join(BASE_MODEL_DIR, 'vocab.json')
+TOKENIZER_FILE = os.path.join(BASE_MODEL_DIR, 'tokenizer.json')
+
 print("Loading model architecture...")
 config = XttsConfig()
 config.load_json(CONFIG_PATH)
@@ -42,10 +46,13 @@ if hasattr(config.audio, 'frame_shift_ms'): delattr(config.audio, 'frame_shift_m
 
 model = Xtts.init_from_config(config)
 
-# 🛠️ TOKENIZER FIX: Manually instantiate and assign the tokenizer
-print("Manually loading VoiceBpeTokenizer...")
-# The VoiceBpeTokenizer constructor loads the required files from the path
-model.tokenizer = VoiceBpeTokenizer.init_from_config(config, directory=BASE_MODEL_DIR)
+# 🛠️ TOKENIZER FIX: Manually instantiate the tokenizer using the constructor
+print("Manually loading VoiceBpeTokenizer via constructor...")
+model.tokenizer = VoiceBpeTokenizer(
+    config=config, 
+    vocab_file=VOCAB_FILE, 
+    model_file=TOKENIZER_FILE
+)
 
 # 2. Load Weights
 print(f"Loading weights from {MODEL_CHECKPOINT_PATH}...")
@@ -92,6 +99,7 @@ try:
     
     with torch.no_grad():
         speaker_embedding = model.gpt.get_conditioning(mels)
+        # Global Average Pooling Fix
         gpt_cond_latent = speaker_embedding.mean(dim=2, keepdim=False).squeeze(0)
     
     gpt_cond_latent = gpt_cond_latent.unsqueeze(0)
