@@ -31,6 +31,7 @@ LEARNING_RATE = 5e-6
 # -------------------------------------------------------------------------
 def format_dataset(csv_file, train_json, eval_json):
     if not os.path.exists(csv_file): raise FileNotFoundError(f"❌ Could not find {csv_file}")
+    print("Converting metadata.csv to XTTS JSON format...")
     items = []
     with open(csv_file, 'r', encoding='utf-8') as f:
         reader = csv.reader(f, delimiter='|')
@@ -82,7 +83,14 @@ def resurrect_dvae(model, checkpoint_dir):
     # 3. Load Weights
     model_path = os.path.join(checkpoint_dir, "model.pth")
     print(f"   Loading weights from {model_path}...")
-    full_state_dict = torch.load(model_path, map_location="cpu")
+    checkpoint = torch.load(model_path, map_location="cpu")
+    
+    # 🛠️ FIX: Unwrap the 'model' key if present
+    if "model" in checkpoint:
+        print("   Unwrapping 'model' key from checkpoint...")
+        full_state_dict = checkpoint["model"]
+    else:
+        full_state_dict = checkpoint
     
     # 🛠️ STRATEGY 1: Look for 'dvae.' prefix
     dvae_state_dict = {k.replace("dvae.", ""): v for k, v in full_state_dict.items() if k.startswith("dvae.")}
@@ -92,13 +100,8 @@ def resurrect_dvae(model, checkpoint_dir):
         print("   'dvae.' prefix not found. Trying 'hifigan_decoder.vqgan.'...")
         dvae_state_dict = {k.replace("hifigan_decoder.vqgan.", ""): v for k, v in full_state_dict.items() if k.startswith("hifigan_decoder.vqgan.")}
 
-    # 🛠️ FAILURE MODE: Print keys to debug
     if not dvae_state_dict:
-        print("❌ VQGAN weights not found in checkpoint!")
-        print("   Dumping first 20 keys in checkpoint for inspection:")
-        for i, key in enumerate(full_state_dict.keys()):
-            if i > 20: break
-            print(f"   - {key}")
+        print("❌ VQGAN weights STILL not found!")
         sys.exit(1)
         
     dvae.load_state_dict(dvae_state_dict)
@@ -154,7 +157,7 @@ def main():
     if model.ap is None:
         model.ap = AudioProcessor(sample_rate=22050, num_mels=80, do_trim_silence=True, n_fft=1024, win_length=1024, hop_length=256)
 
-    # 🛠️ RESURRECT DVAE (With improved key search)
+    # 🛠️ RESURRECT DVAE (With unwrapping logic)
     resurrect_dvae(model, CHECKPOINT_DIR)
 
     # -------------------------------------------------------------------------
