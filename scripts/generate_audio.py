@@ -11,6 +11,7 @@ from TTS.tts.layers.xtts.tokenizer import VoiceBpeTokenizer
 # --------------------------------------------------------------------------
 # --- CONFIGURATION ---
 MODEL_DIR = "/home/ubuntu/digital_twin_project/models/xtts_finetuned-December-11-2025_01+15PM-3e81100"
+# Use the checkpoint you verified exists
 MODEL_CHECKPOINT_NAME = "checkpoint_3070.pth" 
 MODEL_CHECKPOINT_PATH = os.path.join(MODEL_DIR, MODEL_CHECKPOINT_NAME)
 CONFIG_PATH = os.path.join(MODEL_DIR, "config.json")
@@ -21,6 +22,50 @@ TARGET_TEXT = "Hello Gemini, this is the voice I just trained. I hope it sounds 
 LANGUAGE = "en"
 
 # --------------------------------------------------------------------------
+# --- HELPER: SMART CHECKPOINT LOADER ---
+def load_custom_checkpoint(model, checkpoint_path, device):
+    print(f"🛠️ Loading and remapping weights from {checkpoint_path}...")
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    
+    # Handle 'model' key nesting
+    state_dict = checkpoint.get("model", checkpoint)
+    
+    # Get the model's actual keys
+    model_keys = set(model.state_dict().keys())
+    
+    new_state_dict = {}
+    matched_keys = 0
+    ignored_keys = 0
+    
+    for k, v in state_dict.items():
+        # 1. Direct match
+        if k in model_keys:
+            new_state_dict[k] = v
+            matched_keys += 1
+            continue
+            
+        # 2. Fix 'gpt_inference' prefix mismatch
+        # Checkpoint: gpt.gpt_inference.transformer...
+        # Model:      gpt.transformer...
+        if "gpt_inference" in k:
+            new_k = k.replace("gpt_inference.", "")
+            if new_k in model_keys:
+                new_state_dict[new_k] = v
+                matched_keys += 1
+                continue
+                
+        # 3. Handle 'dvae' keys (Ignore them, inference doesn't use DVAE directly)
+        if k.startswith("dvae"):
+            ignored_keys += 1
+            continue
+            
+        # print(f"⚠️ Unmatched key: {k}") # Uncomment to debug missing keys
+
+    # Load the remapped dictionary
+    model.load_state_dict(new_state_dict, strict=False)
+    print(f"✅ Loaded {matched_keys} keys. Ignored {ignored_keys} keys (DVAE/Other).")
+    
+# --------------------------------------------------------------------------
 # --- EXECUTION ---
 if not os.path.exists(MODEL_CHECKPOINT_PATH):
     print(f"Error: Model checkpoint not found at {MODEL_CHECKPOINT_PATH}")
@@ -28,7 +73,7 @@ if not os.path.exists(MODEL_CHECKPOINT_PATH):
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# 1. Determine Base Model Path (for Tokenizer)
+# 1. Determine Base Model Path
 manager = ModelManager()
 model_path_tuple = manager.download_model("tts_models/multilingual/multi-dataset/xtts_v2")
 BASE_MODEL_DIR = os.path.dirname(model_path_tuple[0])
@@ -58,24 +103,17 @@ if hasattr(config.audio, 'frame_shift_ms'): delattr(config.audio, 'frame_shift_m
 model = Xtts.init_from_config(config)
 
 # Manually instantiate tokenizer
-print(f"Loading Tokenizer from {vocab_file}...")
+print("Manually loading VoiceBpeTokenizer...")
 model.tokenizer = VoiceBpeTokenizer(vocab_file=vocab_file)
 
-# 2. Load Weights
-print(f"Loading weights from {MODEL_CHECKPOINT_PATH}...")
-checkpoint = torch.load(MODEL_CHECKPOINT_PATH, map_location=device)
-state_dict = checkpoint.get("model", checkpoint)
-
-# Filter keys just in case, though usually Xtts.init handles this if structure matches
-model.load_state_dict(state_dict, strict=False)
-print("✅ Model weights loaded successfully.")
+# 2. LOAD WEIGHTS WITH REMAPPING (The Fix)
+load_custom_checkpoint(model, MODEL_CHECKPOINT_PATH, device)
 
 model.to(device)
 model.eval()
 
-# 3. Initialize Audio Processor (HARDCODED TO MATCH TRAINING)
+# 3. Initialize Audio Processor
 print("Initializing AudioProcessor (Hardcoded to match training)...")
-# These are the exact parameters used in 'train_xtts_real.py'
 ap = AudioProcessor(
     sample_rate=22050, 
     num_mels=80, 
@@ -84,53 +122,25 @@ ap = AudioProcessor(
     win_length=1024, 
     hop_length=256
 )
+# Assign AP to model so internal methods work
+model.ap = ap
 
 # 4. Generate Speaker Latent
 print("Generating speaker latent...")
 try:
-    reference_wav = ap.load_wav(REFERENCE_WAV_PATH, sr=ap.sample_rate)
-    wav_tensor = torch.from_numpy(reference_wav).unsqueeze(0).unsqueeze(0).to(device) 
+    # Now that weights are loaded, this projection should produce valid vectors
+    gpt_cond_latent, speaker_embedding = model.get_conditioning_latents(
+        audio_path=[REFERENCE_WAV_PATH],
+        gpt_cond_len=30,
+        max_autocast_cache=True 
+    )
     
-    # Debug: Check audio stats
-    print(f"   Audio Tensor Stats: Min={wav_tensor.min():.4f}, Max={wav_tensor.max():.4f}, Mean={wav_tensor.mean():.4f}")
-
-    # Compute Mels using the FIXED AudioProcessor
-    wav_numpy = wav_tensor.squeeze().cpu().numpy() 
-    mels_numpy = ap.melspectrogram(wav_numpy)
-    mels = torch.from_numpy(mels_numpy).unsqueeze(0).to(device)
-    
-    with torch.no_grad():
-        # Get raw features [1, 1024, T]
-        latents_raw = model.gpt.get_conditioning(mels) 
-        
-        # Pool over time dimension (dim=2) to get a global vector [1, 1024, 1]
-        latents_pooled = latents_raw.mean(dim=2, keepdim=True)
-        
-    # Prepare inputs
-    gpt_cond_latent = latents_pooled.transpose(1, 2) # [1, 1, 1024]
-    speaker_embedding = latents_pooled[:, :512, :]   # [1, 512, 1]
-
-    # Debug: Check latent stats
-    print(f"   Latent Stats: Mean={gpt_cond_latent.mean():.4f}, Std={gpt_cond_latent.std():.4f}")
-    if torch.isnan(gpt_cond_latent).any():
-        print("❌ CRITICAL: Latent contains NaNs!")
-        sys.exit(1)
-
-    gpt_cond_latent = gpt_cond_latent.to(device)
-    speaker_embedding = speaker_embedding.to(device)
-
 except Exception as e:
-    print(f"Fatal Error during latent generation: {e}")
+    print(f"Error using standard latent method: {e}")
     sys.exit(1)
 
-# 5. Debug Tokenization
-print(f"Tokenizing text: '{TARGET_TEXT}'")
-tokens = model.tokenizer.encode(TARGET_TEXT, lang=LANGUAGE)
-print(f"   Tokens: {tokens}")
-print(f"   Token Count: {len(tokens)}")
-
-# 6. Synthesize Speech
-print("Synthesizing speech...")
+# 5. Synthesize Speech
+print(f"Synthesizing speech for: '{TARGET_TEXT}'")
 with torch.no_grad():
     chunks = model.inference_stream(
         TARGET_TEXT,
@@ -138,18 +148,16 @@ with torch.no_grad():
         gpt_cond_latent,
         speaker_embedding,
         enable_text_splitting=True,
-        # Generation Parameters to force output
         temperature=0.7, 
         length_penalty=1.0,
-        repetition_penalty=10.0, # High penalty to prevent loops, encouraging new tokens
+        repetition_penalty=2.0,
         top_k=50,
-        top_p=0.85,
+        top_p=0.8,
     )
 
     wav_chunks = []
-    for i, chunk in enumerate(chunks):
+    for chunk in chunks:
         if chunk is not None:
-            # print(f"   Received chunk {i}, shape: {chunk.shape}") # Uncomment to see chunk flow
             wav_chunks.append(chunk.cpu().numpy())
 
     if not wav_chunks:
