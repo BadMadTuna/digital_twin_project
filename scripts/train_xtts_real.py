@@ -110,6 +110,7 @@ def resurrect_dvae(model, checkpoint_dir):
     
     checkpoint = torch.load(dvae_path, map_location="cpu")
     
+    # 1. Remap keys
     new_checkpoint = {}
     for k, v in checkpoint.items():
         if ".conv." in k and ("decoder" in k or "encoder" in k):
@@ -118,6 +119,7 @@ def resurrect_dvae(model, checkpoint_dir):
         else:
             new_checkpoint[k] = v
             
+    # 2. Filter Shape Mismatches
     model_state = dvae.state_dict()
     filtered_checkpoint = {}
     for k, v in new_checkpoint.items():
@@ -129,6 +131,7 @@ def resurrect_dvae(model, checkpoint_dir):
         else:
              filtered_checkpoint[k] = v
 
+    # 3. Load
     dvae.load_state_dict(filtered_checkpoint, strict=False)
     print("✅ DVAE weights loaded successfully (Encoder is ready).")
 
@@ -186,7 +189,7 @@ def main():
     resurrect_dvae(model, CHECKPOINT_DIR)
 
     # -------------------------------------------------------------------------
-    # 🛠️ PATCH 7: CUSTOM GPT TRAINING STEP (Robust Quantizer Search)
+    # 🛠️ PATCH 7: CUSTOM GPT TRAINING STEP (FINAL FIX)
     # -------------------------------------------------------------------------
     def patched_train_step(self, batch, criterion=None):
         text_inputs = batch.get("text_input")
@@ -199,40 +202,10 @@ def main():
 
         # Compute Codes
         with torch.no_grad():
-            if hasattr(self.dvae, "encode"):
-                _, _, info = self.dvae.encode(mel_inputs_transposed)
-                audio_codes = info[2]
-            else:
-                # 1. Run Encoder
-                z = self.dvae.encoder(mel_inputs_transposed)
-                
-                # 2. Run Quantizer (Search for it)
-                quantizer_module = None
-                if hasattr(self.dvae, "quantize"):
-                     # It's a method
-                     _, _, info = self.dvae.quantize(z)
-                     audio_codes = info[2]
-                elif hasattr(self.dvae, "vector_quantizer"):
-                     # It's a submodule
-                     quantizer_module = self.dvae.vector_quantizer
-                elif hasattr(self.dvae, "quantizer"):
-                     # It's a submodule
-                     quantizer_module = self.dvae.quantizer
-                
-                if quantizer_module:
-                     # Call the found submodule
-                     # Returns: (z_q, loss, (perplexity, min_encodings, indices))
-                     ret = quantizer_module(z)
-                     if len(ret) == 3 and isinstance(ret[2], tuple):
-                         audio_codes = ret[2][2]
-                     else:
-                         # Fallback: assume last element is indices
-                         audio_codes = ret[-1]
-                elif not hasattr(self.dvae, "quantize"):
-                     # 🚨 DEBUG: If we still can't find it, print available attributes
-                     print("\n❌ DVAE Quantizer not found. Available attributes:")
-                     print([a for a in dir(self.dvae) if not a.startswith("__")])
-                     raise RuntimeError("Could not find quantizer method on DVAE.")
+            # 🛠️ USE 'get_codebook_indices'
+            # This method was found via inspection and is the correct way to get codes
+            # directly from input mels.
+            audio_codes = self.dvae.get_codebook_indices(mel_inputs_transposed)
 
         # Compute Latents
         with torch.no_grad():
