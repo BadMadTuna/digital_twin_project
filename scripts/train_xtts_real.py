@@ -165,6 +165,8 @@ def main():
     config.model_args.use_d_vector_file = False
     config.model_args.use_language_embedding = False
 
+    config.r = 1
+
     # Patch 6: Audio Processor
     # We explicitly provide FFT settings to prevent the "NoneType" division error.
     if model.ap is None:
