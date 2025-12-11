@@ -110,7 +110,6 @@ def resurrect_dvae(model, checkpoint_dir):
     
     checkpoint = torch.load(dvae_path, map_location="cpu")
     
-    # 1. Remap keys
     new_checkpoint = {}
     for k, v in checkpoint.items():
         if ".conv." in k and ("decoder" in k or "encoder" in k):
@@ -119,7 +118,6 @@ def resurrect_dvae(model, checkpoint_dir):
         else:
             new_checkpoint[k] = v
             
-    # 2. Filter Shape Mismatches
     model_state = dvae.state_dict()
     filtered_checkpoint = {}
     for k, v in new_checkpoint.items():
@@ -131,7 +129,6 @@ def resurrect_dvae(model, checkpoint_dir):
         else:
              filtered_checkpoint[k] = v
 
-    # 3. Load
     dvae.load_state_dict(filtered_checkpoint, strict=False)
     print("✅ DVAE weights loaded successfully (Encoder is ready).")
 
@@ -189,7 +186,7 @@ def main():
     resurrect_dvae(model, CHECKPOINT_DIR)
 
     # -------------------------------------------------------------------------
-    # 🛠️ PATCH 7: CUSTOM GPT TRAINING STEP (MANUAL ENCODING & TRANSPOSE)
+    # 🛠️ PATCH 7: CUSTOM GPT TRAINING STEP (Robust Quantizer Search)
     # -------------------------------------------------------------------------
     def patched_train_step(self, batch, criterion=None):
         text_inputs = batch.get("text_input")
@@ -197,8 +194,7 @@ def main():
         mel_inputs = batch.get("mel_input")
         mel_lengths = batch.get("mel_lengths")
 
-        # 🛠️ TRANSPOSE FIX: [Batch, Time, Channels] -> [Batch, Channels, Time]
-        # PyTorch Conv1d needs the channel dim in the middle.
+        # 🛠️ TRANSPOSE: [B, T, C] -> [B, C, T]
         mel_inputs_transposed = mel_inputs.transpose(1, 2)
 
         # Compute Codes
@@ -207,23 +203,40 @@ def main():
                 _, _, info = self.dvae.encode(mel_inputs_transposed)
                 audio_codes = info[2]
             else:
-                # 1. Run Encoder (expects [B, C, T])
+                # 1. Run Encoder
                 z = self.dvae.encoder(mel_inputs_transposed)
-                # 2. Run Quantizer
+                
+                # 2. Run Quantizer (Search for it)
+                quantizer_module = None
                 if hasattr(self.dvae, "quantize"):
+                     # It's a method
                      _, _, info = self.dvae.quantize(z)
                      audio_codes = info[2]
-                elif hasattr(self.dvae, "vq"):
-                     _, _, info = self.dvae.vq(z)
-                     audio_codes = info[2]
-                else:
+                elif hasattr(self.dvae, "vector_quantizer"):
+                     # It's a submodule
+                     quantizer_module = self.dvae.vector_quantizer
+                elif hasattr(self.dvae, "quantizer"):
+                     # It's a submodule
+                     quantizer_module = self.dvae.quantizer
+                
+                if quantizer_module:
+                     # Call the found submodule
+                     # Returns: (z_q, loss, (perplexity, min_encodings, indices))
+                     ret = quantizer_module(z)
+                     if len(ret) == 3 and isinstance(ret[2], tuple):
+                         audio_codes = ret[2][2]
+                     else:
+                         # Fallback: assume last element is indices
+                         audio_codes = ret[-1]
+                elif not hasattr(self.dvae, "quantize"):
+                     # 🚨 DEBUG: If we still can't find it, print available attributes
+                     print("\n❌ DVAE Quantizer not found. Available attributes:")
+                     print([a for a in dir(self.dvae) if not a.startswith("__")])
                      raise RuntimeError("Could not find quantizer method on DVAE.")
 
-        # Compute Latents (Speaker Encoder also usually likes [B, C, T])
+        # Compute Latents
         with torch.no_grad():
             if hasattr(self, "speaker_encoder"):
-                # Note: Some speaker encoders want [B, C, T], some [B, T, C].
-                # Standard XTTS ResNetSpeakerEncoder wants [B, C, T].
                 cond_latents = self.speaker_encoder(mel_inputs_transposed)
             else:
                 cond_latents = self.hifigan_decoder(mel_inputs_transposed, return_latents=True)
