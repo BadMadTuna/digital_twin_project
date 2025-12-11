@@ -29,27 +29,24 @@ if not os.path.exists(MODEL_CHECKPOINT_PATH):
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# 1. Determine Base Model Path
+# 1. Determine Base Model Path and Load Config
 manager = ModelManager()
 model_path_tuple = manager.download_model("tts_models/multilingual/multi-dataset/xtts_v2")
 BASE_MODEL_DIR = os.path.dirname(model_path_tuple[0])
 
-# 🛠️ ROBUST FILE FINDER: Find vocab.json or tokenizer.json automatically
+# Robustly find the vocab file
 vocab_file = None
 for root, dirs, files in os.walk(BASE_MODEL_DIR):
     if "vocab.json" in files:
         vocab_file = os.path.join(root, "vocab.json")
         break
-    if "tokenizer.json" in files: # fallback name
+    if "tokenizer.json" in files:
         vocab_file = os.path.join(root, "tokenizer.json")
         break
 
 if not vocab_file:
-    print(f"❌ Error: Could not find vocab.json in {BASE_MODEL_DIR}")
-    print("Files found:", os.listdir(BASE_MODEL_DIR))
+    print("Error: Could not find vocab.json")
     sys.exit(1)
-
-print(f"✅ Found vocab file at: {vocab_file}")
 
 print("Loading model architecture...")
 config = XttsConfig()
@@ -61,7 +58,7 @@ if hasattr(config.audio, 'frame_shift_ms'): delattr(config.audio, 'frame_shift_m
 
 model = Xtts.init_from_config(config)
 
-# 🛠️ TOKENIZER FIX: Manually instantiate using the found file
+# 🛠️ TOKENIZER FIX: Manually instantiate with only the vocab_file argument
 print("Manually loading VoiceBpeTokenizer...")
 model.tokenizer = VoiceBpeTokenizer(vocab_file=vocab_file)
 
@@ -75,16 +72,15 @@ print("✅ Model weights loaded successfully.")
 model.to(device)
 model.eval()
 
-# 3. Initialize Audio Processor (Stabilized Configuration)
+# 3. Initialize Audio Processor
 print("Initializing AudioProcessor...")
-
 SR = config.audio.sample_rate
 NFFT = getattr(config.audio, 'n_fft', getattr(config.audio, 'fft_size', 1024))
 WL = getattr(config.audio, 'win_length', NFFT)
 HL = getattr(config.audio, 'hop_length', getattr(config.audio, 'frame_shift', 256))
 NUM_MELS = getattr(config.audio, 'num_mels', 80)
 
-# Calculate the millisecond values to inject as non-None floats
+# Calculate the millisecond values to inject
 frame_length_ms = WL * 1000 / SR
 frame_shift_ms = HL * 1000 / SR
 
@@ -108,12 +104,19 @@ try:
     mels = torch.from_numpy(mels_numpy).unsqueeze(0).to(device)
     
     with torch.no_grad():
-        speaker_embedding = model.gpt.get_conditioning(mels)
-        # Global Average Pooling Fix
-        gpt_cond_latent = speaker_embedding.mean(dim=2, keepdim=False).squeeze(0)
+        # Get raw features [1, 1024, T]
+        speaker_embedding_features = model.gpt.get_conditioning(mels)
+        
+        # Pool to [1024] vector
+        # mean over time (dim 2) -> [1, 1024], squeeze -> [1024]
+        latents = speaker_embedding_features.mean(dim=2, keepdim=False).squeeze(0)
     
-    gpt_cond_latent = gpt_cond_latent.unsqueeze(0)
-    speaker_embedding = speaker_embedding.unsqueeze(0).to(device)
+    # 🛠️ DIMENSION FIXES:
+    # 1. GPT Cond Latent needs to be 3D: [Batch, 1, Dim] -> [1, 1, 1024]
+    gpt_cond_latent = latents.unsqueeze(0).unsqueeze(0).to(device)
+    
+    # 2. Speaker Embedding (for Vocoder) needs to be 2D: [Batch, Dim] -> [1, 1024]
+    speaker_embedding = latents.unsqueeze(0).to(device)
 
 except Exception as e:
     print(f"Fatal Error during latent generation: {e}")
@@ -130,13 +133,15 @@ with torch.no_grad():
         enable_text_splitting=True,
     )
 
-# 6. Concatenate and Save
-wav_chunks = []
-for chunk in chunks:
-    if chunk is not None:
-        wav_chunks.append(chunk.cpu().numpy())
+    # 6. Concatenate and Save
+    wav_chunks = []
+    for chunk in chunks:
+        if chunk is not None:
+            wav_chunks.append(chunk.cpu().numpy())
 
-final_wav = np.concatenate(wav_chunks)
-ap.save_wav(final_wav, OUTPUT_WAV_PATH, sr=ap.sample_rate)
-
-print(f"\n✅ Synthesis Complete! Audio saved to: {OUTPUT_WAV_PATH}")
+    if not wav_chunks:
+        print("Error: No audio chunks generated.")
+    else:
+        final_wav = np.concatenate(wav_chunks)
+        ap.save_wav(final_wav, OUTPUT_WAV_PATH, sr=ap.sample_rate)
+        print(f"\n✅ Synthesis Complete! Audio saved to: {OUTPUT_WAV_PATH}")
