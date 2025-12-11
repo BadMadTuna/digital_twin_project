@@ -6,6 +6,7 @@ import torch
 import types
 import sys
 import requests
+import numpy as np
 from TTS.utils.manage import ModelManager
 from TTS.utils.audio import AudioProcessor
 from trainer import Trainer, TrainerArgs
@@ -110,7 +111,6 @@ def resurrect_dvae(model, checkpoint_dir):
     
     checkpoint = torch.load(dvae_path, map_location="cpu")
     
-    # 1. Remap keys
     new_checkpoint = {}
     for k, v in checkpoint.items():
         if ".conv." in k and ("decoder" in k or "encoder" in k):
@@ -119,7 +119,6 @@ def resurrect_dvae(model, checkpoint_dir):
         else:
             new_checkpoint[k] = v
             
-    # 2. Filter Shape Mismatches
     model_state = dvae.state_dict()
     filtered_checkpoint = {}
     for k, v in new_checkpoint.items():
@@ -131,7 +130,6 @@ def resurrect_dvae(model, checkpoint_dir):
         else:
              filtered_checkpoint[k] = v
 
-    # 3. Load
     dvae.load_state_dict(filtered_checkpoint, strict=False)
     print("✅ DVAE weights loaded successfully (Encoder is ready).")
 
@@ -189,7 +187,39 @@ def main():
     resurrect_dvae(model, CHECKPOINT_DIR)
 
     # -------------------------------------------------------------------------
-    # 🛠️ PATCH 7: CUSTOM GPT TRAINING STEP (DIRECT ACCESS)
+    # 🛠️ PRE-COMPUTE SPEAKER LATENT (The "Constant Latent" Strategy)
+    # -------------------------------------------------------------------------
+    print("⏳ Pre-computing speaker latent from reference audio...")
+    # Find a valid reference audio file
+    ref_audio_path = None
+    for f in os.listdir(WAVS_DIR):
+        if f.endswith(".wav"):
+            ref_audio_path = os.path.join(WAVS_DIR, f)
+            break
+    
+    if not ref_audio_path:
+        raise FileNotFoundError("No .wav files found in WAVS_DIR to compute speaker latent.")
+
+    print(f"   Using reference: {ref_audio_path}")
+    
+    # Load raw audio [1, T]
+    wav = model.ap.load_wav(ref_audio_path)
+    # Speaker Encoder expects [Batch, 1, Time]
+    wav_tensor = torch.FloatTensor(wav).unsqueeze(0).unsqueeze(0)
+    
+    if torch.cuda.is_available():
+        wav_tensor = wav_tensor.cuda()
+
+    # Compute Latent
+    with torch.no_grad():
+        speaker_latent = model.hifigan_decoder.speaker_encoder(wav_tensor)
+        print(f"✅ Speaker Latent Computed: {speaker_latent.shape}")
+        
+    # Store it on the model to access in the training loop
+    model.fixed_speaker_latent = speaker_latent
+
+    # -------------------------------------------------------------------------
+    # 🛠️ PATCH 7: CUSTOM GPT TRAINING STEP
     # -------------------------------------------------------------------------
     def patched_train_step(self, batch, criterion=None):
         text_inputs = batch.get("text_input")
@@ -197,21 +227,17 @@ def main():
         mel_inputs = batch.get("mel_input")
         mel_lengths = batch.get("mel_lengths")
 
-        # 🛠️ TRANSPOSE: [B, T, C] -> [B, C, T]
+        # 1. Compute Codes (Mel -> Codes)
         mel_inputs_transposed = mel_inputs.transpose(1, 2)
-
-        # 1. Compute Codes (Using helper method)
         with torch.no_grad():
             audio_codes = self.dvae.get_codebook_indices(mel_inputs_transposed)
 
-        # 2. Compute Latents (Direct Access to submodule)
-        with torch.no_grad():
-            # 🛠️ FIX: Don't call the wrapper, call the encoder directly.
-            # We found 'hifigan_decoder.speaker_encoder' in the inspection logs.
-            cond_latents = self.hifigan_decoder.speaker_encoder(mel_inputs_transposed)
+        # 2. Use Pre-computed Speaker Latent
+        # Expand [1, D] -> [Batch, D]
+        batch_size = text_inputs.shape[0]
+        cond_latents = self.fixed_speaker_latent.expand(batch_size, -1)
 
         # 3. Train GPT
-        # Note: We must pass 'audio_codes' and 'cond_latents' explicitly
         outputs = self.gpt(
             text_inputs=text_inputs,
             text_lengths=text_lengths,
