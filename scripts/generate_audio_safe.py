@@ -10,12 +10,11 @@ from TTS.utils.manage import ModelManager
 from TTS.tts.layers.xtts.tokenizer import VoiceBpeTokenizer
 
 # --------------------------------------------------------------------------
-# --- CONFIGURATION (EXPLICIT) ---
+# --- CONFIGURATION ---
 # 1. Point to your specific training directory
 MODEL_DIR = "/home/ubuntu/digital_twin_project/models/xtts_finetuned-December-11-2025_02+59PM-bae2302"
 
 # 2. Select the specific checkpoint you want to test
-# Options from your list: checkpoint_500.pth, checkpoint_1000.pth, checkpoint_1500.pth
 CHECKPOINT_NAME = "checkpoint_1500.pth"
 
 MODEL_CHECKPOINT_PATH = os.path.join(MODEL_DIR, CHECKPOINT_NAME)
@@ -113,32 +112,33 @@ def main():
     model.to(device)
     model.eval()
 
-    # 4. Setup Audio Processor (Hardcoded to match training)
+    # 4. Setup Audio Processor (Hardcoded)
     print("Initializing Audio Processor...")
     ap = AudioProcessor(
         sample_rate=22050, num_mels=80, do_trim_silence=True, 
         n_fft=1024, win_length=1024, hop_length=256
     )
+    # Assign AP to model so internal methods work
     model.ap = ap
 
-    # 5. Extract Speaker Latent (Manual Method)
+    # 5. Extract Speaker Latent (Standard Method)
     print("Generating speaker latent...")
     try:
-        reference_wav = ap.load_wav(REFERENCE_WAV_PATH, sr=ap.sample_rate)
-        wav_tensor = torch.from_numpy(reference_wav).unsqueeze(0).unsqueeze(0).to(device)
-        wav_numpy = wav_tensor.squeeze().cpu().numpy()
-        mels = torch.from_numpy(ap.melspectrogram(wav_numpy)).unsqueeze(0).to(device)
-
-        with torch.no_grad():
-            latents_raw = model.gpt.get_conditioning(mels)
-            latents_pooled = latents_raw.mean(dim=2, keepdim=True)
-            
-        gpt_cond_latent = latents_pooled.transpose(1, 2)
-        speaker_embedding = latents_pooled[:, :512, :]
-        
+        # Use the internal method to guarantee correct dimensions/slicing
+        gpt_cond_latent, speaker_embedding = model.get_conditioning_latents(
+            audio_path=[REFERENCE_WAV_PATH],
+            gpt_cond_len=30
+        )
     except Exception as e:
         print(f"❌ Latent generation failed: {e}")
+        # Cleanup before exit
+        if os.path.exists(temp_ckpt_path): os.remove(temp_ckpt_path)
         sys.exit(1)
+
+    # Debug Tokens
+    print(f"Tokenizing text: '{TARGET_TEXT}'")
+    tokens = model.tokenizer.encode(TARGET_TEXT, lang=LANGUAGE)
+    print(f"   Token Count: {len(tokens)}")
 
     # 6. Inference
     print("🗣️  Synthesizing...")
