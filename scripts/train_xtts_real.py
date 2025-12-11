@@ -5,6 +5,7 @@ import random
 import torch
 import types
 import inspect
+import sys
 from TTS.utils.manage import ModelManager
 from TTS.utils.audio import AudioProcessor
 from trainer import Trainer, TrainerArgs
@@ -175,23 +176,42 @@ def main():
             hop_length=256
         )
 
-    # Patch 7: Train Step (Robust Method Binding)
-    # We explicitly bind the function to the instance to ensure 'self' is passed correctly.
-    # The Generic Trainer passes (batch, criterion), but XTTS only accepts (batch).
+    # -------------------------------------------------------------------------
+    # 🔍 DEBUG: INSPECT TRAIN_STEP SIGNATURE
+    # -------------------------------------------------------------------------
+    print("\n" + "="*50)
+    print("🔍 INSPECTING MODEL METHODS")
+    print("="*50)
     
-    # Capture the original bound method
-    _original_train_step = model.train_step
+    # 1. Check if train_step exists
+    if hasattr(model, "train_step"):
+        print(f"✅ model.train_step exists.")
+        
+        # 2. Get the actual function
+        original_method = model.train_step
+        print(f"   Type: {type(original_method)}")
+        
+        # 3. Print the signature (arguments it expects)
+        try:
+            sig = inspect.signature(original_method)
+            print(f"   Signature: {sig}")
+        except Exception as e:
+            print(f"   Could not get signature: {e}")
 
-    def patched_train_step(self, batch, criterion=None):
-        # We ignore 'criterion' and pass only 'batch' to the original method.
-        # Note: _original_train_step is ALREADY bound to 'model', so we call it 
-        # like a normal function. We do NOT pass 'self' again.
-        return _original_train_step(batch)
+        # 4. Check for 'forward' just in case
+        if hasattr(model, "forward"):
+             try:
+                print(f"   model.forward signature: {inspect.signature(model.forward)}")
+             except:
+                pass
+    else:
+        print("❌ model.train_step DOES NOT EXIST.")
 
-    # Bind the new method to the instance
-    model.train_step = types.MethodType(patched_train_step, model)
+    print("="*50 + "\n")
     
-    # =========================================================================
+    # Stop here so we don't clear the logs with a crash later
+    sys.exit("⛔ Stopping for inspection.")
+    # -------------------------------------------------------------------------
 
     # 5. Load Data
     print("⏳ Loading data samples...")
