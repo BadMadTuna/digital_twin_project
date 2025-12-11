@@ -90,7 +90,7 @@ def download_dvae_if_missing(checkpoint_dir):
     return dvae_path
 
 # -------------------------------------------------------------------------
-# 🛠️ RESURRECTION UTILITY (Robust Shape Checking)
+# 🛠️ RESURRECTION UTILITY
 # -------------------------------------------------------------------------
 def resurrect_dvae(model, checkpoint_dir):
     print("✨ Attempting to resurrect missing VQGAN/DVAE...")
@@ -110,7 +110,7 @@ def resurrect_dvae(model, checkpoint_dir):
     
     checkpoint = torch.load(dvae_path, map_location="cpu")
     
-    # 1. Remap keys (fix .conv. mismatches)
+    # 1. Remap keys
     new_checkpoint = {}
     for k, v in checkpoint.items():
         if ".conv." in k and ("decoder" in k or "encoder" in k):
@@ -119,23 +119,19 @@ def resurrect_dvae(model, checkpoint_dir):
         else:
             new_checkpoint[k] = v
             
-    # 2. 🛠️ SHAPE CHECKER: Filter out size mismatches
-    # We get the shapes the model EXPECTS
+    # 2. Filter Shape Mismatches
     model_state = dvae.state_dict()
     filtered_checkpoint = {}
-    
     for k, v in new_checkpoint.items():
         if k in model_state:
-            expected_shape = model_state[k].shape
-            if v.shape != expected_shape:
-                print(f"   ⚠️ Skipping shape mismatch for {k}: Checkpoint {v.shape} vs Model {expected_shape}")
-                # We skip this key. Since it's likely a Decoder key, we don't care (we only need Encoder).
+            if v.shape != model_state[k].shape:
+                pass # Skip mismatch
             else:
                 filtered_checkpoint[k] = v
         else:
              filtered_checkpoint[k] = v
 
-    # 3. Load with strict=False
+    # 3. Load
     dvae.load_state_dict(filtered_checkpoint, strict=False)
     print("✅ DVAE weights loaded successfully (Encoder is ready).")
 
@@ -189,11 +185,11 @@ def main():
     if model.ap is None:
         model.ap = AudioProcessor(sample_rate=22050, num_mels=80, do_trim_silence=True, n_fft=1024, win_length=1024, hop_length=256)
 
-    # 🛠️ RESURRECT DVAE (With Robust Loader)
+    # 🛠️ RESURRECT DVAE
     resurrect_dvae(model, CHECKPOINT_DIR)
 
     # -------------------------------------------------------------------------
-    # 🛠️ PATCH 7: CUSTOM GPT TRAINING STEP
+    # 🛠️ PATCH 7: CUSTOM GPT TRAINING STEP (MANUAL ENCODING)
     # -------------------------------------------------------------------------
     def patched_train_step(self, batch, criterion=None):
         text_inputs = batch.get("text_input")
@@ -203,8 +199,24 @@ def main():
 
         # Compute Codes
         with torch.no_grad():
-            _, _, info = self.dvae.encode(mel_inputs)
-            audio_codes = info[2] 
+            # 🛠️ MANUAL ENCODE LOGIC
+            # If 'encode' is missing, we use encoder + quantize manually.
+            if hasattr(self.dvae, "encode"):
+                _, _, info = self.dvae.encode(mel_inputs)
+                audio_codes = info[2]
+            else:
+                # 1. Run Encoder
+                z = self.dvae.encoder(mel_inputs)
+                # 2. Run Quantizer (usually named 'quantize' or 'vq')
+                if hasattr(self.dvae, "quantize"):
+                     # Returns: (z_q, loss, (perplexity, min_encodings, indices))
+                     _, _, info = self.dvae.quantize(z)
+                     audio_codes = info[2]
+                elif hasattr(self.dvae, "vq"):
+                     _, _, info = self.dvae.vq(z)
+                     audio_codes = info[2]
+                else:
+                     raise RuntimeError("Could not find quantizer method on DVAE.")
 
         # Compute Latents
         with torch.no_grad():
