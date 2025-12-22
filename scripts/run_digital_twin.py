@@ -12,12 +12,9 @@ from TTS.tts.layers.xtts.tokenizer import VoiceBpeTokenizer
 # ⚙️ CONFIGURATION
 # =========================================================================
 
-# --- PATHS ---
-# We use os.getcwd() so it works regardless of exact path, but assumes running from project root
 PROJECT_ROOT = os.getcwd() 
 
 # 1. XTTS SETTINGS
-# Update these if you want to switch to a different training run
 TRAIN_RUN_NAME = "xtts_finetuned-December-11-2025_02+59PM-bae2302"
 CHECKPOINT_NAME = "checkpoint_5000.pth" 
 
@@ -25,17 +22,18 @@ MODEL_DIR = os.path.join(PROJECT_ROOT, "models", TRAIN_RUN_NAME)
 CHECKPOINT_PATH = os.path.join(MODEL_DIR, CHECKPOINT_NAME)
 CONFIG_PATH = os.path.join(MODEL_DIR, "config.json")
 
-# Reference Audio (The one used for cloning)
 REF_AUDIO_PATH = os.path.join(PROJECT_ROOT, "audio_data/dataset/wavs/segment_0330.wav") 
 OUTPUT_AUDIO_PATH = os.path.join(PROJECT_ROOT, "temp_speech.wav")
 LANGUAGE = "en"
 
-# 2. VIDEO SETTINGS (LivePortrait in venv_video)
+# 2. VIDEO SETTINGS (Hekenye/LivePortrait-AudioDriven)
 SOURCE_IMAGE_PATH = os.path.join(PROJECT_ROOT, "assets/avatar.jpg")
-# The script will output to this folder. The file will typically be named after the source image.
-OUTPUT_VIDEO_DIR = PROJECT_ROOT 
 
-# Paths to the Video Environment
+# This fork usually outputs to a directory named 'animations' by default, 
+# or we specify an output directory.
+OUTPUT_VIDEO_DIR = os.path.join(PROJECT_ROOT, "outputs")
+if not os.path.exists(OUTPUT_VIDEO_DIR): os.makedirs(OUTPUT_VIDEO_DIR)
+
 PYTHON_VIDEO_EXEC = os.path.join(PROJECT_ROOT, "venv_video", "bin", "python")
 LIVEPORTRAIT_DIR = os.path.join(PROJECT_ROOT, "LivePortrait")
 LIVEPORTRAIT_SCRIPT = os.path.join(LIVEPORTRAIT_DIR, "inference.py") 
@@ -52,17 +50,14 @@ def load_xtts_model():
     config = XttsConfig()
     config.load_json(CONFIG_PATH)
     
-    # Clean config quirks
     if hasattr(config.audio, 'frame_length_ms'): delattr(config.audio, 'frame_length_ms')
     if hasattr(config.audio, 'frame_shift_ms'): delattr(config.audio, 'frame_shift_ms')
 
     model = Xtts.init_from_config(config)
     
-    # Tokenizer Setup
     base_dir = os.path.expanduser("~/.local/share/tts/tts_models--multilingual--multi-dataset--xtts_v2")
     vocab_file = os.path.join(base_dir, "vocab.json")
     if not os.path.exists(vocab_file):
-        # Fallback
         import TTS.utils.manage as manage
         mgr = manage.ModelManager()
         path = mgr.download_model("tts_models/multilingual/multi-dataset/xtts_v2")[0]
@@ -70,7 +65,6 @@ def load_xtts_model():
     
     model.tokenizer = VoiceBpeTokenizer(vocab_file=vocab_file)
 
-    # Load & Remap Weights
     checkpoint = torch.load(CHECKPOINT_PATH, map_location="cuda")
     state_dict = checkpoint.get("model", checkpoint)
     model_keys = set(model.state_dict().keys())
@@ -88,7 +82,6 @@ def load_xtts_model():
     model.cuda()
     model.eval()
     
-    # Hardcode AP parameters to match training
     model.ap = AudioProcessor(sample_rate=22050, num_mels=80, do_trim_silence=True, n_fft=1024, win_length=1024, hop_length=256)
     return model
 
@@ -118,7 +111,7 @@ def generate_audio(model, text):
     return OUTPUT_AUDIO_PATH
 
 # =========================================================================
-# 🎥 VIDEO ENGINE (Calling venv_video)
+# 🎥 VIDEO ENGINE (LivePortrait Audio Fork)
 # =========================================================================
 
 def generate_video(audio_path):
@@ -127,18 +120,13 @@ def generate_video(audio_path):
     
     if not os.path.exists(SOURCE_IMAGE_PATH):
         print(f"❌ Avatar image missing at: {SOURCE_IMAGE_PATH}")
-        print("   Please upload a photo of yourself to 'assets/avatar.jpg' first.")
         return
 
-    # Check if we have the video environment python
-    if not os.path.exists(PYTHON_VIDEO_EXEC):
-        print(f"❌ Video VEnv Python not found: {PYTHON_VIDEO_EXEC}")
-        return
-
-    # COMMAND CONSTRUCTION
-    # -s: Source Image
-    # -d: Driving Audio (Supported by the fork you installed)
-    # --output-dir: Directory to save the result
+    # COMMAND CONSTRUCTION for Hekenye/LivePortrait-AudioDriven
+    # Based on their likely arguments:
+    # -s / --source : Source Image
+    # -d / --driving : Driving Input (Audio wav supported here)
+    # --output-dir : Directory for results
     cmd = [
         PYTHON_VIDEO_EXEC, 
         LIVEPORTRAIT_SCRIPT,
@@ -148,17 +136,11 @@ def generate_video(audio_path):
     ]
     
     try:
-        # We run this in the LivePortrait directory so it finds its weights/configs
+        # Run inside LivePortrait dir to find relative config files
         subprocess.run(cmd, check=True, cwd=LIVEPORTRAIT_DIR)
         
-        # Determine likely output name for user feedback
-        # LivePortrait usually names it: {image_name}--{audio_name}_concat.mp4
-        img_name = os.path.splitext(os.path.basename(SOURCE_IMAGE_PATH))[0]
-        aud_name = os.path.splitext(os.path.basename(audio_path))[0]
-        likely_output = os.path.join(OUTPUT_VIDEO_DIR, f"{img_name}--{aud_name}_concat.mp4")
-        
         print(f"✅ Video Finished ({time.time()-t0:.2f}s)")
-        print(f"   Look for file ending in '_concat.mp4' in: {OUTPUT_VIDEO_DIR}")
+        print(f"   Check the '{OUTPUT_VIDEO_DIR}' folder.")
         
     except subprocess.CalledProcessError as e:
         print(f"❌ Video Generation Failed.")
@@ -169,22 +151,22 @@ def generate_video(audio_path):
 # 🚀 MAIN LOOP
 # =========================================================================
 def main():
-    # 1. Load Audio Model (Once)
+    # Ensure we are running from project root for relative paths to work
+    if os.path.basename(os.getcwd()) == "scripts":
+        os.chdir("..")
+
     model = load_xtts_model()
     
     print("\n✨ Digital Twin Interface ✨")
-    print(f"   Audio Engine: {TRAIN_RUN_NAME} | Checkpoint: {CHECKPOINT_NAME}")
-    print(f"   Video Engine: LivePortrait (via venv_video)")
+    print(f"   Audio Engine: {TRAIN_RUN_NAME}")
+    print(f"   Video Engine: LivePortrait (Audio-Driven Fork)")
     
     while True:
         text = input("\n📝 Enter text (or 'exit'): ")
         if text.lower() in ["exit", "quit"]: break
         if not text.strip(): continue
             
-        # 1. Speak
         audio_file = generate_audio(model, text)
-        
-        # 2. Animate
         generate_video(audio_file)
 
 if __name__ == "__main__":
