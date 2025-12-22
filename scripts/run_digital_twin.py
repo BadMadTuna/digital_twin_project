@@ -16,7 +16,7 @@ PROJECT_ROOT = os.getcwd()
 
 # 1. XTTS SETTINGS
 TRAIN_RUN_NAME = "xtts_finetuned-December-11-2025_02+59PM-bae2302"
-CHECKPOINT_NAME = "checkpoint_5000.pth" 
+CHECKPOINT_NAME = "checkpoint_1500.pth" 
 
 MODEL_DIR = os.path.join(PROJECT_ROOT, "models", TRAIN_RUN_NAME)
 CHECKPOINT_PATH = os.path.join(MODEL_DIR, CHECKPOINT_NAME)
@@ -26,17 +26,35 @@ REF_AUDIO_PATH = os.path.join(PROJECT_ROOT, "audio_data/dataset/wavs/segment_033
 OUTPUT_AUDIO_PATH = os.path.join(PROJECT_ROOT, "temp_speech.wav")
 LANGUAGE = "en"
 
-# 2. VIDEO SETTINGS (Hekenye/LivePortrait-AudioDriven)
+# 2. VIDEO SETTINGS (Specific to Hekenye/LivePortrait-AudioDriven)
 SOURCE_IMAGE_PATH = os.path.join(PROJECT_ROOT, "assets/avatar.jpg")
-
-# This fork usually outputs to a directory named 'animations' by default, 
-# or we specify an output directory.
 OUTPUT_VIDEO_DIR = os.path.join(PROJECT_ROOT, "outputs")
 if not os.path.exists(OUTPUT_VIDEO_DIR): os.makedirs(OUTPUT_VIDEO_DIR)
 
 PYTHON_VIDEO_EXEC = os.path.join(PROJECT_ROOT, "venv_video", "bin", "python")
 LIVEPORTRAIT_DIR = os.path.join(PROJECT_ROOT, "LivePortrait")
-LIVEPORTRAIT_SCRIPT = os.path.join(LIVEPORTRAIT_DIR, "inference.py") 
+
+# 🔍 AUTO-DETECT KEY FILES
+# 1. Inference Script
+INFERENCE_SCRIPT_NAME = "inference_with_audio.py"
+LIVEPORTRAIT_SCRIPT = os.path.join(LIVEPORTRAIT_DIR, INFERENCE_SCRIPT_NAME)
+
+# 2. Statistic File (Recursive Search)
+STATISTIC_PATH = None
+print("🔍 Searching for statistic.pt...")
+for root, dirs, files in os.walk(LIVEPORTRAIT_DIR):
+    if "statistic.pt" in files:
+        STATISTIC_PATH = os.path.join(root, "statistic.pt")
+        print(f"   Found: {STATISTIC_PATH}")
+        break
+
+# 3. Pretrained Model Path (Recursive Search for main checkpoint)
+# Usually named something like 'landmark_model.pth' or just the folder. 
+# Based on the user prompt, it expects a path. We'll default to the 'pretrained_weights' dir 
+# or a specific file if we can guess it.
+PRETRAINED_MODEL_PATH = os.path.join(LIVEPORTRAIT_DIR, "pretrained_weights")
+# If there is a specific 'liveportrait.pth' or similar, we might need to point to it.
+# For now, pointing to the directory is the safest bet for these scripts unless it asks for a specific .pth
 
 # =========================================================================
 # 🔊 XTTS ENGINE
@@ -111,32 +129,44 @@ def generate_audio(model, text):
     return OUTPUT_AUDIO_PATH
 
 # =========================================================================
-# 🎥 VIDEO ENGINE (LivePortrait Audio Fork)
+# 🎥 VIDEO ENGINE (Specific for Hekenye Fork)
 # =========================================================================
 
 def generate_video(audio_path):
-    print("🎬 Starting LivePortrait (Audio-Driven)...")
+    print(f"🎬 Starting LivePortrait ({INFERENCE_SCRIPT_NAME})...")
     t0 = time.time()
     
     if not os.path.exists(SOURCE_IMAGE_PATH):
         print(f"❌ Avatar image missing at: {SOURCE_IMAGE_PATH}")
         return
 
-    # COMMAND CONSTRUCTION for Hekenye/LivePortrait-AudioDriven
-    # Based on their likely arguments:
-    # -s / --source : Source Image
-    # -d / --driving : Driving Input (Audio wav supported here)
-    # --output-dir : Directory for results
+    if not os.path.exists(LIVEPORTRAIT_SCRIPT):
+        print(f"❌ Script not found: {LIVEPORTRAIT_SCRIPT}")
+        print("   Please check the folder structure of LivePortrait.")
+        return
+
+    # Check for statistic file
+    stat_arg = STATISTIC_PATH
+    if not stat_arg:
+        print("⚠️  Warning: 'statistic.pt' not found automatically.")
+        # Fallback assumption if the user hasn't downloaded it yet
+        # We might need to assume a default path or fail gracefully
+        stat_arg = os.path.join(LIVEPORTRAIT_DIR, "processed_MEAD", "statistic.pt")
+        print(f"   Using default/guessed path: {stat_arg}")
+
+    # COMMAND CONSTRUCTION
     cmd = [
         PYTHON_VIDEO_EXEC, 
         LIVEPORTRAIT_SCRIPT,
         "-s", SOURCE_IMAGE_PATH,
         "-d", audio_path, 
-        "--output-dir", OUTPUT_VIDEO_DIR
+        "-o", OUTPUT_VIDEO_DIR,
+        "--statistic_path", stat_arg,
+        "--pretrained_model_path", PRETRAINED_MODEL_PATH
     ]
     
     try:
-        # Run inside LivePortrait dir to find relative config files
+        # Run inside LivePortrait dir
         subprocess.run(cmd, check=True, cwd=LIVEPORTRAIT_DIR)
         
         print(f"✅ Video Finished ({time.time()-t0:.2f}s)")
@@ -151,7 +181,7 @@ def generate_video(audio_path):
 # 🚀 MAIN LOOP
 # =========================================================================
 def main():
-    # Ensure we are running from project root for relative paths to work
+    # Ensure we are running from project root
     if os.path.basename(os.getcwd()) == "scripts":
         os.chdir("..")
 
@@ -159,7 +189,7 @@ def main():
     
     print("\n✨ Digital Twin Interface ✨")
     print(f"   Audio Engine: {TRAIN_RUN_NAME}")
-    print(f"   Video Engine: LivePortrait (Audio-Driven Fork)")
+    print(f"   Video Engine: LivePortrait (Audio Fork)")
     
     while True:
         text = input("\n📝 Enter text (or 'exit'): ")
