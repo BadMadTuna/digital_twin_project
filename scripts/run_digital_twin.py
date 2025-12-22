@@ -12,16 +12,16 @@ from TTS.tts.layers.xtts.tokenizer import VoiceBpeTokenizer
 # ⚙️ CONFIGURATION
 # =========================================================================
 
-# --- PATHS (Dynamic based on your 'ls' output) ---
-PROJECT_ROOT = os.getcwd() # Assumes you run this from ~/digital_twin_project
-MODELS_DIR = os.path.join(PROJECT_ROOT, "models")
+# --- PATHS ---
+# We use os.getcwd() so it works regardless of exact path, but assumes running from project root
+PROJECT_ROOT = os.getcwd() 
 
 # 1. XTTS SETTINGS
-# Automatically find the latest training run if you don't want to hardcode
-TRAIN_RUN_NAME = "xtts_finetuned-December-11-2025_02+59PM-bae2302" # Update if you prefer a different one
-CHECKPOINT_NAME = "checkpoint_5000.pth" 
+# Update these if you want to switch to a different training run
+TRAIN_RUN_NAME = "xtts_finetuned-December-11-2025_02+59PM-bae2302"
+CHECKPOINT_NAME = "checkpoint_1500.pth" 
 
-MODEL_DIR = os.path.join(MODELS_DIR, TRAIN_RUN_NAME)
+MODEL_DIR = os.path.join(PROJECT_ROOT, "models", TRAIN_RUN_NAME)
 CHECKPOINT_PATH = os.path.join(MODEL_DIR, CHECKPOINT_NAME)
 CONFIG_PATH = os.path.join(MODEL_DIR, "config.json")
 
@@ -31,15 +31,14 @@ OUTPUT_AUDIO_PATH = os.path.join(PROJECT_ROOT, "temp_speech.wav")
 LANGUAGE = "en"
 
 # 2. VIDEO SETTINGS (LivePortrait in venv_video)
-SOURCE_IMAGE_PATH = os.path.join(PROJECT_ROOT, "assets/avatar.jpg") # ⚠️ Make sure you put a jpg here!
-OUTPUT_VIDEO_PATH = os.path.join(PROJECT_ROOT, "final_digital_twin.mp4")
+SOURCE_IMAGE_PATH = os.path.join(PROJECT_ROOT, "assets/avatar.jpg")
+# The script will output to this folder. The file will typically be named after the source image.
+OUTPUT_VIDEO_DIR = PROJECT_ROOT 
 
-# Pointing to the VENV you already created
+# Paths to the Video Environment
 PYTHON_VIDEO_EXEC = os.path.join(PROJECT_ROOT, "venv_video", "bin", "python")
 LIVEPORTRAIT_DIR = os.path.join(PROJECT_ROOT, "LivePortrait")
 LIVEPORTRAIT_SCRIPT = os.path.join(LIVEPORTRAIT_DIR, "inference.py") 
-# Note: Standard inference.py needs a driving video. 
-# If using an audio-fork, change this to "inference_audio.py"
 
 # =========================================================================
 # 🔊 XTTS ENGINE
@@ -89,6 +88,7 @@ def load_xtts_model():
     model.cuda()
     model.eval()
     
+    # Hardcode AP parameters to match training
     model.ap = AudioProcessor(sample_rate=22050, num_mels=80, do_trim_silence=True, n_fft=1024, win_length=1024, hop_length=256)
     return model
 
@@ -122,7 +122,7 @@ def generate_audio(model, text):
 # =========================================================================
 
 def generate_video(audio_path):
-    print("🎬 Starting LivePortrait...")
+    print("🎬 Starting LivePortrait (Audio-Driven)...")
     t0 = time.time()
     
     if not os.path.exists(SOURCE_IMAGE_PATH):
@@ -136,23 +136,34 @@ def generate_video(audio_path):
         return
 
     # COMMAND CONSTRUCTION
-    # This assumes you have an inference script that accepts --driving audio
-    # If using standard LivePortrait, you might need to adapt this to use a bridge script
+    # -s: Source Image
+    # -d: Driving Audio (Supported by the fork you installed)
+    # --output-dir: Directory to save the result
     cmd = [
         PYTHON_VIDEO_EXEC, 
         LIVEPORTRAIT_SCRIPT,
-        "--source", SOURCE_IMAGE_PATH,
-        "--driving", audio_path, 
-        "--output", OUTPUT_VIDEO_PATH
+        "-s", SOURCE_IMAGE_PATH,
+        "-d", audio_path, 
+        "--output-dir", OUTPUT_VIDEO_DIR
     ]
     
     try:
         # We run this in the LivePortrait directory so it finds its weights/configs
         subprocess.run(cmd, check=True, cwd=LIVEPORTRAIT_DIR)
-        print(f"✅ Video Ready ({time.time()-t0:.2f}s) -> {OUTPUT_VIDEO_PATH}")
+        
+        # Determine likely output name for user feedback
+        # LivePortrait usually names it: {image_name}--{audio_name}_concat.mp4
+        img_name = os.path.splitext(os.path.basename(SOURCE_IMAGE_PATH))[0]
+        aud_name = os.path.splitext(os.path.basename(audio_path))[0]
+        likely_output = os.path.join(OUTPUT_VIDEO_DIR, f"{img_name}--{aud_name}_concat.mp4")
+        
+        print(f"✅ Video Finished ({time.time()-t0:.2f}s)")
+        print(f"   Look for file ending in '_concat.mp4' in: {OUTPUT_VIDEO_DIR}")
+        
     except subprocess.CalledProcessError as e:
-        print(f"❌ Video Generation Failed. Check if '{LIVEPORTRAIT_SCRIPT}' supports audio input.")
-        print(f"   Error: {e}")
+        print(f"❌ Video Generation Failed.")
+        print(f"   Command used: {' '.join(cmd)}")
+        print(f"   Error code: {e}")
 
 # =========================================================================
 # 🚀 MAIN LOOP
