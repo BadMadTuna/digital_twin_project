@@ -19,7 +19,7 @@ MODELS_DIR = os.path.join(PROJECT_ROOT, "models")
 # 1. XTTS SETTINGS
 # Automatically find the latest training run if you don't want to hardcode
 TRAIN_RUN_NAME = "xtts_finetuned-December-11-2025_02+59PM-bae2302" # Update if you prefer a different one
-CHECKPOINT_NAME = "checkpoint_1500.pth" 
+CHECKPOINT_NAME = "checkpoint_5000.pth" 
 
 MODEL_DIR = os.path.join(MODELS_DIR, TRAIN_RUN_NAME)
 CHECKPOINT_PATH = os.path.join(MODEL_DIR, CHECKPOINT_NAME)
