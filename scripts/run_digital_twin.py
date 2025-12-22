@@ -3,7 +3,6 @@ import sys
 import torch
 import subprocess
 import time
-import glob
 from TTS.tts.configs.xtts_config import XttsConfig
 from TTS.tts.models.xtts import Xtts
 from TTS.utils.audio import AudioProcessor
@@ -15,7 +14,7 @@ from TTS.tts.layers.xtts.tokenizer import VoiceBpeTokenizer
 
 PROJECT_ROOT = os.getcwd() 
 
-# 1. XTTS SETTINGS (Your Voice)
+# 1. XTTS SETTINGS (Voice)
 TRAIN_RUN_NAME = "xtts_finetuned-December-11-2025_02+59PM-bae2302"
 CHECKPOINT_NAME = "checkpoint_5000.pth" 
 
@@ -33,41 +32,39 @@ SOURCE_IMAGE_PATH = os.path.join(PROJECT_ROOT, "assets/avatar.jpg")
 OUTPUT_VIDEO_DIR = os.path.join(PROJECT_ROOT, "outputs")
 if not os.path.exists(OUTPUT_VIDEO_DIR): os.makedirs(OUTPUT_VIDEO_DIR)
 
-# Ditto Environment & Script Paths
+# Ditto Paths
 DITTO_DIR = os.path.join(PROJECT_ROOT, "Ditto")
 PYTHON_DITTO_EXEC = os.path.join(PROJECT_ROOT, "venv_ditto", "bin", "python")
 DITTO_SCRIPT = os.path.join(DITTO_DIR, "inference.py")
 
-# 🔍 Auto-Find Ditto Config (.pkl)
-# Ditto needs a .pkl config file to run. We search for it.
-DITTO_CONFIG_PATH = None
-# Search recursively for a likely config file
-found_configs = glob.glob(os.path.join(DITTO_DIR, "**", "*cfg*.pkl"), recursive=True)
-if found_configs:
-    DITTO_CONFIG_PATH = found_configs[0] # Take the first one found
-    print(f"🔍 Found Ditto config: {os.path.basename(DITTO_CONFIG_PATH)}")
-else:
-    print("⚠️ Warning: No .pkl config found in Ditto folder. Inference might fail.")
+# 3. DITTO CHECKPOINTS (Based on your GitHub download)
+# We assume the user cloned into 'checkpoints' inside the Ditto folder
+CHECKPOINTS_ROOT = os.path.join(DITTO_DIR, "checkpoints")
+
+# The specific config file for offline generation
+DITTO_CONFIG_PKL = os.path.join(CHECKPOINTS_ROOT, "ditto_cfg", "v0.4_hubert_cfg_trt.pkl")
+
+# The folder containing the TensorRT engines
+# Note: If you are on an older GPU (T4/Volta), 'Ampere_Plus' might warn, but let's try it.
+DITTO_DATA_ROOT = os.path.join(CHECKPOINTS_ROOT, "ditto_trt_Ampere_Plus")
 
 # =========================================================================
 # 🔊 XTTS ENGINE
 # =========================================================================
 
 def load_xtts_model():
-    print(f"⏳ Loading XTTS Model from {CHECKPOINT_NAME}...")
+    print(f"⏳ Loading XTTS Model ({CHECKPOINT_NAME})...")
     if not os.path.exists(CHECKPOINT_PATH):
         sys.exit(f"❌ Checkpoint not found: {CHECKPOINT_PATH}")
 
     config = XttsConfig()
     config.load_json(CONFIG_PATH)
     
-    # Cleanup legacy config attributes if present
     if hasattr(config.audio, 'frame_length_ms'): delattr(config.audio, 'frame_length_ms')
     if hasattr(config.audio, 'frame_shift_ms'): delattr(config.audio, 'frame_shift_ms')
 
     model = Xtts.init_from_config(config)
     
-    # Robust Tokenizer Loading
     base_dir = os.path.expanduser("~/.local/share/tts/tts_models--multilingual--multi-dataset--xtts_v2")
     vocab_file = os.path.join(base_dir, "vocab.json")
     if not os.path.exists(vocab_file):
@@ -78,7 +75,6 @@ def load_xtts_model():
     
     model.tokenizer = VoiceBpeTokenizer(vocab_file=vocab_file)
 
-    # Load Weights
     checkpoint = torch.load(CHECKPOINT_PATH, map_location="cuda")
     state_dict = checkpoint.get("model", checkpoint)
     model_keys = set(model.state_dict().keys())
@@ -132,27 +128,28 @@ def generate_video(audio_path):
     
     if not os.path.exists(SOURCE_IMAGE_PATH):
         print(f"❌ Avatar image missing at: {SOURCE_IMAGE_PATH}")
-        print("   Please upload a photo of yourself to 'assets/avatar.jpg'")
+        return
+    
+    if not os.path.exists(DITTO_CONFIG_PKL):
+        print(f"❌ Config missing: {DITTO_CONFIG_PKL}")
+        print("   Did you run 'git clone' inside the Ditto folder?")
         return
 
-    # UPDATED COMMAND CONSTRUCTION
-    # Correct flags: --source_path, --audio_path, --output_path, --cfg_pkl
+    # EXACT COMMAND STRUCTURE FROM GITHUB
     output_file = os.path.join(OUTPUT_VIDEO_DIR, "ditto_output.mp4")
     
     cmd = [
         PYTHON_DITTO_EXEC, 
         DITTO_SCRIPT,
-        "--source_path", SOURCE_IMAGE_PATH,
+        "--data_root", DITTO_DATA_ROOT,
+        "--cfg_pkl", DITTO_CONFIG_PKL,
         "--audio_path", audio_path,
+        "--source_path", SOURCE_IMAGE_PATH,
         "--output_path", output_file
     ]
     
-    # Append config if we found one
-    if DITTO_CONFIG_PATH:
-        cmd.extend(["--cfg_pkl", DITTO_CONFIG_PATH])
-    
     try:
-        # We run inside the Ditto directory so it finds relative paths (checkpoints/configs)
+        # Run inside Ditto dir
         subprocess.run(cmd, check=True, cwd=DITTO_DIR)
         print(f"✅ Video Finished ({time.time()-t0:.2f}s)")
         print(f"   Saved to: {output_file}")
@@ -166,7 +163,6 @@ def generate_video(audio_path):
 # 🚀 MAIN LOOP
 # =========================================================================
 def main():
-    # Ensure we are running from project root
     if os.path.basename(os.getcwd()) == "scripts":
         os.chdir("..")
 
