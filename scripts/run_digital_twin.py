@@ -3,6 +3,7 @@ import sys
 import torch
 import subprocess
 import time
+import glob
 from TTS.tts.configs.xtts_config import XttsConfig
 from TTS.tts.models.xtts import Xtts
 from TTS.utils.audio import AudioProcessor
@@ -16,7 +17,7 @@ PROJECT_ROOT = os.getcwd()
 
 # 1. XTTS SETTINGS (Your Voice)
 TRAIN_RUN_NAME = "xtts_finetuned-December-11-2025_02+59PM-bae2302"
-CHECKPOINT_NAME = "checkpoint_5000.pth"  # <--- UPDATED to 5000
+CHECKPOINT_NAME = "checkpoint_5000.pth" 
 
 MODEL_DIR = os.path.join(PROJECT_ROOT, "models", TRAIN_RUN_NAME)
 CHECKPOINT_PATH = os.path.join(MODEL_DIR, CHECKPOINT_NAME)
@@ -28,7 +29,6 @@ OUTPUT_AUDIO_PATH = os.path.join(PROJECT_ROOT, "temp_speech.wav")
 LANGUAGE = "en"
 
 # 2. VIDEO SETTINGS (Ditto Engine)
-# Make sure your avatar image is here
 SOURCE_IMAGE_PATH = os.path.join(PROJECT_ROOT, "assets/avatar.jpg")
 OUTPUT_VIDEO_DIR = os.path.join(PROJECT_ROOT, "outputs")
 if not os.path.exists(OUTPUT_VIDEO_DIR): os.makedirs(OUTPUT_VIDEO_DIR)
@@ -37,6 +37,17 @@ if not os.path.exists(OUTPUT_VIDEO_DIR): os.makedirs(OUTPUT_VIDEO_DIR)
 DITTO_DIR = os.path.join(PROJECT_ROOT, "Ditto")
 PYTHON_DITTO_EXEC = os.path.join(PROJECT_ROOT, "venv_ditto", "bin", "python")
 DITTO_SCRIPT = os.path.join(DITTO_DIR, "inference.py")
+
+# 🔍 Auto-Find Ditto Config (.pkl)
+# Ditto needs a .pkl config file to run. We search for it.
+DITTO_CONFIG_PATH = None
+# Search recursively for a likely config file
+found_configs = glob.glob(os.path.join(DITTO_DIR, "**", "*cfg*.pkl"), recursive=True)
+if found_configs:
+    DITTO_CONFIG_PATH = found_configs[0] # Take the first one found
+    print(f"🔍 Found Ditto config: {os.path.basename(DITTO_CONFIG_PATH)}")
+else:
+    print("⚠️ Warning: No .pkl config found in Ditto folder. Inference might fail.")
 
 # =========================================================================
 # 🔊 XTTS ENGINE
@@ -124,22 +135,27 @@ def generate_video(audio_path):
         print("   Please upload a photo of yourself to 'assets/avatar.jpg'")
         return
 
-    # Standard Ditto Inference Call
-    # Note: If your Ditto version uses a config file (e.g. --config path/to/config), add it here.
+    # UPDATED COMMAND CONSTRUCTION
+    # Correct flags: --source_path, --audio_path, --output_path, --cfg_pkl
+    output_file = os.path.join(OUTPUT_VIDEO_DIR, "ditto_output.mp4")
+    
     cmd = [
         PYTHON_DITTO_EXEC, 
         DITTO_SCRIPT,
-        "--source_image", SOURCE_IMAGE_PATH,
+        "--source_path", SOURCE_IMAGE_PATH,
         "--audio_path", audio_path,
-        "--output_path", os.path.join(OUTPUT_VIDEO_DIR, "ditto_output.mp4"),
-        "--device", "cuda"
+        "--output_path", output_file
     ]
+    
+    # Append config if we found one
+    if DITTO_CONFIG_PATH:
+        cmd.extend(["--cfg_pkl", DITTO_CONFIG_PATH])
     
     try:
         # We run inside the Ditto directory so it finds relative paths (checkpoints/configs)
         subprocess.run(cmd, check=True, cwd=DITTO_DIR)
         print(f"✅ Video Finished ({time.time()-t0:.2f}s)")
-        print(f"   Saved to: {os.path.join(OUTPUT_VIDEO_DIR, 'ditto_output.mp4')}")
+        print(f"   Saved to: {output_file}")
         
     except subprocess.CalledProcessError as e:
         print(f"❌ Video Generation Failed.")
@@ -157,7 +173,7 @@ def main():
     model = load_xtts_model()
     
     print("\n✨ Digital Twin Interface (Ditto Edition) ✨")
-    print(f"   Audio: {TRAIN_RUN_NAME} (Steps: 5000)")
+    print(f"   Audio: {TRAIN_RUN_NAME}")
     print(f"   Video: AntGroup/Ditto")
     
     while True:
