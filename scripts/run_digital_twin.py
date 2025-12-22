@@ -19,7 +19,7 @@ PROJECT_ROOT = os.getcwd()
 # 1. XTTS SETTINGS
 # Update these if you want to switch to a different training run
 TRAIN_RUN_NAME = "xtts_finetuned-December-11-2025_02+59PM-bae2302"
-CHECKPOINT_NAME = "checkpoint_1500.pth" 
+CHECKPOINT_NAME = "checkpoint_5000.pth" 
 
 MODEL_DIR = os.path.join(PROJECT_ROOT, "models", TRAIN_RUN_NAME)
 CHECKPOINT_PATH = os.path.join(MODEL_DIR, CHECKPOINT_NAME)
