@@ -197,27 +197,71 @@ def chat_pipeline(user_input, mode, history):
         yield history, None, None
 
 # =========================================================================
-# 🖥️ GRADIO UI
+# 🖥️ GRADIO UI (Layout Updated)
 # =========================================================================
-with gr.Blocks(title="Integrated Digital Twin") as demo:
-    gr.Markdown("## 🧬 Integrated Digital Twin")
+with gr.Blocks(title="Integrated Digital Twin", theme=gr.themes.Soft()) as demo:
+    # Header
+    gr.Markdown("# 🧬 Integrated Digital Twin Interface")
+    gr.Markdown("Chat with your AI avatar. Switch modes to enable real-time video generation.")
     
+    # Main Layout container
     with gr.Row():
-        mode_select = gr.Radio(["Voice Only", "Video (Ditto)"], label="Output Mode", value="Voice Only")
-    
-    chatbot = gr.Chatbot(label="Conversation")
-    
-    with gr.Row():
-        msg = gr.Textbox(label="Type message...", scale=4)
-        submit = gr.Button("Send", scale=1)
-    
-    audio_player = gr.Audio(label="Voice Output", autoplay=True, visible=True)
-    video_player = gr.Video(label="Visual Output", autoplay=True, visible=True)
+        # ----- LEFT COLUMN (MAIN CHAT) -----
+        with gr.Column(scale=4):
+            # Mode selection near the chat
+            mode_select = gr.Radio(
+                ["Voice Only", "Video (Ditto)"], 
+                label="Output Mode", 
+                value="Voice Only", 
+                info="Video mode will take several seconds to process each response."
+            )
+            
+            # The main chat window
+            chatbot = gr.Chatbot(label="Conversation", height=500)
+            
+            # Input area
+            with gr.Row():
+                msg = gr.Textbox(
+                    label="Type message...", 
+                    placeholder="Ask me anything...",
+                    scale=4,
+                    autofocus=True
+                )
+                submit = gr.Button("Send", scale=1, variant="primary")
 
+        # ----- RIGHT COLUMN (AVATAR VIEW - Top Right) -----
+        with gr.Column(scale=1, min_width=300):
+            gr.Markdown("### Avatar View")
+            
+            # Video Player (Top Right)
+            # Setting interactive=False prevents the user from uploading their own video
+            video_player = gr.Video(
+                label="Visual Output", 
+                autoplay=True, 
+                visible=True, 
+                interactive=False,
+                height=300 # Fixed height to keep it compact
+            )
+            
+            # Audio Player (Below Video)
+            audio_player = gr.Audio(
+                label="Voice Output", 
+                autoplay=True, 
+                visible=True, 
+                interactive=False
+            )
+
+    # Helper to clear text box
     def clear_msg(): return ""
 
-    msg.submit(chat_pipeline, [msg, mode_select, chatbot], [chatbot, audio_player, video_player]).then(clear_msg, None, msg)
-    submit.click(chat_pipeline, [msg, mode_select, chatbot], [chatbot, audio_player, video_player]).then(clear_msg, None, msg)
+    # Event Wiring
+    # Note: We update both players. The pipeline decides which one gets data.
+    msg.submit(chat_pipeline, [msg, mode_select, chatbot], [chatbot, audio_player, video_player]) \
+       .then(clear_msg, None, msg)
+       
+    submit.click(chat_pipeline, [msg, mode_select, chatbot], [chatbot, audio_player, video_player]) \
+          .then(clear_msg, None, msg)
 
 if __name__ == "__main__":
-    demo.queue().launch(share=True, server_name="0.0.0.0", server_port=7860)
+    # Launch with public link
+    demo.queue().launch(share=True, server_name="0.0.0.0", server_port=7860, allowed_paths=[PROJECT_ROOT])
