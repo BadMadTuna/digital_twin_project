@@ -32,7 +32,6 @@ DITTO_SCRIPT = os.path.expanduser("~/digital_twin_project/Ditto/run_headless.py"
 DITTO_ROOT = os.path.expanduser("~/digital_twin_project/Ditto")
 DITTO_CFG = os.path.join(DITTO_ROOT, "checkpoints/ditto_cfg/v0.4_hubert_cfg_trt.pkl")
 DITTO_DATA = os.path.join(DITTO_ROOT, "checkpoints/ditto_trt_Ampere_Plus")
-# The static image of your avatar
 AVATAR_IMAGE = os.path.expanduser("~/digital_twin_project/assets/avatar.jpg")
 
 # =========================================================================
@@ -69,29 +68,39 @@ def generate_ditto_video(audio_path):
     """
     Calls the Ditto environment to animate the avatar.
     """
+    # Create output filename
     output_video = audio_path.replace(".wav", ".mp4")
     
-    # Construct the command to run in the OTHER virtual environment
+    # Construct command
     cmd = [
         DITTO_PYTHON, DITTO_SCRIPT,
         "--cfg_pkl", DITTO_CFG,
         "--data_root", DITTO_DATA,
         "--source_path", AVATAR_IMAGE,
-        "--audio_path", audio_path,
+        "--audio_path", audio_path,  # Now passing absolute path
         "--output_path", output_video
     ]
     
-    # We need to inject the LD_LIBRARY_PATH so Ditto finds CuDNN
+    # Inject LD_LIBRARY_PATH so the subprocess finds CuDNN 8
     env = os.environ.copy()
     ditto_lib = os.path.expanduser("~/digital_twin_project/venv_ditto/lib/python3.10/site-packages/nvidia/cudnn/lib")
-    env["LD_LIBRARY_PATH"] = f"{env.get('LD_LIBRARY_PATH', '')}:{ditto_lib}"
+    current_ld = env.get("LD_LIBRARY_PATH", "")
+    env["LD_LIBRARY_PATH"] = f"{current_ld}:{ditto_lib}"
 
     try:
-        # Run subprocess (Wait for it to finish)
-        subprocess.run(cmd, env=env, check=True, cwd=DITTO_ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # Capture output (PIPE) so we can see errors if it fails
+        result = subprocess.run(
+            cmd, 
+            env=env, 
+            check=True, 
+            cwd=DITTO_ROOT, 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.PIPE,
+            text=True
+        )
         return output_video
     except subprocess.CalledProcessError as e:
-        print(f"❌ Video Gen Failed: {e}")
+        print(f"❌ Video Gen Failed!\nSTDERR: {e.stderr}\nSTDOUT: {e.stdout}")
         return None
 
 # =========================================================================
@@ -102,10 +111,13 @@ def synthesize_audio(text):
     gpt_cond_latent, speaker_embedding = tts_model.get_conditioning_latents(audio_path=[REF_AUDIO_PATH], gpt_cond_len=30, max_ref_length=60)
     out = tts_model.inference(text, LANGUAGE, gpt_cond_latent, speaker_embedding, temperature=0.7, length_penalty=1.0, repetition_penalty=2.0, top_k=50, top_p=0.8)
     
+    # SAVE AS ABSOLUTE PATH to avoid subprocess finding errors
     filename = f"temp_{int(time.time()*1000)}.wav"
-    sf.write(filename, out["wav"], 22050)
+    abs_path = os.path.abspath(filename)
+    
+    sf.write(abs_path, out["wav"], 22050)
     duration = len(out["wav"]) / 22050
-    return filename, duration
+    return abs_path, duration
 
 def chat_pipeline(user_input, mode, history):
     if history is None: history = []
@@ -135,21 +147,26 @@ def chat_pipeline(user_input, mode, history):
                                     
                                     # 2. Generate Video (If Mode is ON)
                                     final_output = audio_path
+                                    video_result = None
+                                    
                                     if mode == "Video (Ditto)":
-                                        video_path = generate_ditto_video(audio_path)
-                                        if video_path: final_output = video_path
+                                        video_result = generate_ditto_video(audio_path)
+                                        if video_result: final_output = video_result
                                     
                                     # 3. Update UI
                                     history[-1][1] += part + " "
                                     
-                                    # Return Audio OR Video depending on mode
+                                    # Return appropriate tuple based on mode
                                     if mode == "Voice Only":
                                         yield history, final_output, None
                                     else:
-                                        yield history, None, final_output
+                                        # If video gen failed, fallback to audio
+                                        if video_result:
+                                            yield history, None, final_output
+                                        else:
+                                            yield history, audio_path, None
                                     
-                                    # Pacing (Wait for playback)
-                                    # Video takes longer to process, so we just wait for audio duration
+                                    # Pacing
                                     if duration > 0: time.sleep(duration + 0.2)
 
                             sentence_buffer = parts[-1]
@@ -158,16 +175,21 @@ def chat_pipeline(user_input, mode, history):
             if sentence_buffer.strip():
                 history[-1][1] += sentence_buffer
                 audio_path, duration = synthesize_audio(sentence_buffer.strip())
-                final_output = audio_path
                 
+                final_output = audio_path
+                video_result = None
+
                 if mode == "Video (Ditto)":
-                    video_path = generate_ditto_video(audio_path)
-                    if video_path: final_output = video_path
+                    video_result = generate_ditto_video(audio_path)
+                    if video_result: final_output = video_result
 
                 if mode == "Voice Only":
                     yield history, final_output, None
                 else:
-                    yield history, None, final_output
+                     if video_result:
+                        yield history, None, final_output
+                     else:
+                        yield history, audio_path, None
 
     except Exception as e:
         history[-1][1] += f"\n[Error: {str(e)}]"
@@ -188,7 +210,6 @@ with gr.Blocks(title="Integrated Digital Twin") as demo:
         msg = gr.Textbox(label="Type message...", scale=4)
         submit = gr.Button("Send", scale=1)
     
-    # We have TWO output players. Only the active one will receive data.
     audio_player = gr.Audio(label="Voice Output", autoplay=True, visible=True)
     video_player = gr.Video(label="Visual Output", autoplay=True, visible=True)
 
