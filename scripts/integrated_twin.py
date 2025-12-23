@@ -26,9 +26,10 @@ REF_AUDIO_PATH = os.path.join(PROJECT_ROOT, "audio_data/dataset/wavs/segment_033
 LANGUAGE = "en"
 
 # 2. VIDEO (DITTO) CONFIGURATION
-# We need absolute paths because we are calling a subprocess
+# We use absolute paths to ensure the subprocess finds everything
 DITTO_PYTHON = os.path.expanduser("~/digital_twin_project/venv_ditto/bin/python")
-DITTO_SCRIPT = os.path.expanduser("~/digital_twin_project/Ditto/run_headless.py")
+# CHANGED: Pointing to the official inference script
+DITTO_SCRIPT = os.path.expanduser("~/digital_twin_project/Ditto/inference.py")
 DITTO_ROOT = os.path.expanduser("~/digital_twin_project/Ditto")
 DITTO_CFG = os.path.join(DITTO_ROOT, "checkpoints/ditto_cfg/v0.4_hubert_cfg_trt.pkl")
 DITTO_DATA = os.path.join(DITTO_ROOT, "checkpoints/ditto_trt_Ampere_Plus")
@@ -66,7 +67,7 @@ tts_model = load_xtts()
 # =========================================================================
 def generate_ditto_video(audio_path):
     """
-    Calls the Ditto environment to animate the avatar.
+    Calls the Ditto environment to animate the avatar using inference.py
     """
     # Create output filename
     output_video = audio_path.replace(".wav", ".mp4")
@@ -77,7 +78,7 @@ def generate_ditto_video(audio_path):
         "--cfg_pkl", DITTO_CFG,
         "--data_root", DITTO_DATA,
         "--source_path", AVATAR_IMAGE,
-        "--audio_path", audio_path,  # Now passing absolute path
+        "--audio_path", audio_path,
         "--output_path", output_video
     ]
     
@@ -89,7 +90,7 @@ def generate_ditto_video(audio_path):
 
     try:
         # Capture output (PIPE) so we can see errors if it fails
-        result = subprocess.run(
+        subprocess.run(
             cmd, 
             env=env, 
             check=True, 
@@ -156,14 +157,14 @@ def chat_pipeline(user_input, mode, history):
                                     # 3. Update UI
                                     history[-1][1] += part + " "
                                     
-                                    # Return appropriate tuple based on mode
+                                    # Return appropriate output
                                     if mode == "Voice Only":
                                         yield history, final_output, None
                                     else:
-                                        # If video gen failed, fallback to audio
                                         if video_result:
                                             yield history, None, final_output
                                         else:
+                                            # Fallback to audio if video fails
                                             yield history, audio_path, None
                                     
                                     # Pacing
