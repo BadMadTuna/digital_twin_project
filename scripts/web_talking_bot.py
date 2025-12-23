@@ -55,7 +55,7 @@ def load_xtts():
 tts_model = load_xtts()
 
 # =========================================================================
-# 🧠 & 🗣️ PIPELINE (Fixed for Gradio 4.x+)
+# 🧠 & 🗣️ PIPELINE (Legacy Format: [[User, Bot], ...])
 # =========================================================================
 
 def synthesize_audio(text):
@@ -78,16 +78,13 @@ def synthesize_audio(text):
 
 def chat_pipeline(user_input, history):
     """
-    Revised pipeline using List of Dictionaries format:
-    [{'role': 'user', 'content': 'Hi'}, {'role': 'assistant', 'content': 'Hello'}]
+    Revised pipeline using classic List of Lists format:
+    [[ "Hi", "Hello" ], [ "How are you?", "Good" ]]
     """
     if history is None: history = []
     
-    # 1. Append User Message
-    history.append({"role": "user", "content": user_input})
-    
-    # 2. Append Empty Assistant Message (to fill in later)
-    history.append({"role": "assistant", "content": ""})
+    # 1. Append new turn: [User Input, Empty Bot Response]
+    history.append([user_input, ""])
     
     payload = {
         "model": LLM_MODEL,
@@ -97,7 +94,6 @@ def chat_pipeline(user_input, history):
     }
     
     sentence_buffer = ""
-    # Regex to find sentence endings (. ! ?)
     sentence_endings = re.compile(r'(?<=[.!?])\s+')
 
     try:
@@ -110,8 +106,8 @@ def chat_pipeline(user_input, history):
                     if "response" in body:
                         token = body["response"]
                         
-                        # Update the last message in history (the assistant's)
-                        history[-1]["content"] += token
+                        # Update the bot's response in the last tuple
+                        history[-1][1] += token
                         sentence_buffer += token
                         
                         # Check for full sentence to speak
@@ -134,18 +130,18 @@ def chat_pipeline(user_input, history):
                 yield history, audio_path
 
     except Exception as e:
-        history[-1]["content"] += f"\n[Error: {str(e)}]"
+        history[-1][1] += f"\n[Error: {str(e)}]"
         yield history, None
 
 # =========================================================================
-# 🖥️ GRADIO UI
+# 🖥️ GRADIO UI (Version 3.x Compatible)
 # =========================================================================
 
 with gr.Blocks(title="Digital Twin Voice Chat") as demo:
     gr.Markdown("## 🤖 Digital Twin Interface")
     
-    # type="messages" enforces the new list-of-dicts format
-    chatbot = gr.Chatbot(label="Conversation", type="messages")
+    # REMOVED type="messages" to support older Gradio
+    chatbot = gr.Chatbot(label="Conversation")
     
     with gr.Row():
         msg = gr.Textbox(label="Type your message...", scale=4)
@@ -153,7 +149,6 @@ with gr.Blocks(title="Digital Twin Voice Chat") as demo:
     
     audio_out = gr.Audio(label="Voice Output", autoplay=True, visible=True)
 
-    # Clear text box on submit
     def clear_msg(): return ""
 
     msg.submit(chat_pipeline, [msg, chatbot], [chatbot, audio_out]) \
