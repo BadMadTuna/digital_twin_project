@@ -13,9 +13,11 @@ from TTS.tts.layers.xtts.tokenizer import VoiceBpeTokenizer
 # =========================================================================
 # ⚙️ CONFIGURATION
 # =========================================================================
+# The Brain (Ollama)
 OLLAMA_URL = "http://localhost:11434/api/generate"
 LLM_MODEL = "llama3.1" 
 
+# The Voice (XTTS Paths)
 PROJECT_ROOT = os.getcwd()
 TRAIN_RUN_NAME = "xtts_finetuned-December-11-2025_02+59PM-bae2302"
 CHECKPOINT_NAME = "checkpoint_5000.pth"
@@ -34,6 +36,7 @@ def load_xtts():
     config.load_json(CONFIG_PATH)
     model = Xtts.init_from_config(config)
     
+    # Tokenizer setup (fixes common path issues)
     base_dir = os.path.expanduser("~/.local/share/tts/tts_models--multilingual--multi-dataset--xtts_v2")
     vocab_file = os.path.join(base_dir, "vocab.json")
     if not os.path.exists(vocab_file):
@@ -45,45 +48,60 @@ def load_xtts():
             print("⚠️ Could not verify vocab file. Assuming standard path.")
 
     model.tokenizer = VoiceBpeTokenizer(vocab_file=vocab_file)
+    
+    # Load the specific fine-tuned checkpoint
     checkpoint = torch.load(CHECKPOINT_PATH, map_location="cuda")
     model.load_state_dict(checkpoint["model"] if "model" in checkpoint else checkpoint, strict=False)
     model.cuda()
     model.eval()
     return model
 
-# Global load
+# Load model once at startup
 tts_model = load_xtts()
 
 # =========================================================================
-# 🧠 & 🗣️ PIPELINE (Legacy Format: [[User, Bot], ...])
+# 🧠 & 🗣️ PIPELINE (Paced & Synced)
 # =========================================================================
 
 def synthesize_audio(text):
-    """Generates audio and returns path."""
-    if not text.strip(): return None
+    """
+    Generates audio for a text chunk.
+    Returns: (file_path, duration_in_seconds)
+    """
+    if not text.strip(): return None, 0
     
+    # Conditioning latents (Clone the voice from the reference file)
     gpt_cond_latent, speaker_embedding = tts_model.get_conditioning_latents(
         audio_path=[REF_AUDIO_PATH], gpt_cond_len=30, max_ref_length=60
     )
     
+    # Run Inference
     out = tts_model.inference(
         text, LANGUAGE, gpt_cond_latent, speaker_embedding,
         temperature=0.7, length_penalty=1.0, repetition_penalty=2.0,
         top_k=50, top_p=0.8
     )
     
+    # Calculate Duration (Wav Array Length / Sample Rate)
+    # We save at 22050Hz, so we divide by that to get seconds
+    sample_rate = 22050
+    duration = len(out["wav"]) / sample_rate
+    
     filename = f"temp_tts_{int(time.time()*1000)}.wav"
-    sf.write(filename, out["wav"], 22050)
-    return filename
+    sf.write(filename, out["wav"], sample_rate)
+    
+    return filename, duration
 
 def chat_pipeline(user_input, history):
     """
-    Revised pipeline using classic List of Lists format:
-    [[ "Hi", "Hello" ], [ "How are you?", "Good" ]]
+    1. Sends prompt to Ollama.
+    2. Buffers stream into sentences.
+    3. Synthesizes sentence.
+    4. Yields to UI -> Waits for audio to finish -> Repeats.
     """
     if history is None: history = []
     
-    # 1. Append new turn: [User Input, Empty Bot Response]
+    # Add new turn to history: [User, Bot (Empty)]
     history.append([user_input, ""])
     
     payload = {
@@ -94,68 +112,5 @@ def chat_pipeline(user_input, history):
     }
     
     sentence_buffer = ""
-    sentence_endings = re.compile(r'(?<=[.!?])\s+')
-
-    try:
-        with requests.post(OLLAMA_URL, json=payload, stream=True) as r:
-            r.raise_for_status()
-            
-            for line in r.iter_lines():
-                if line:
-                    body = json.loads(line)
-                    if "response" in body:
-                        token = body["response"]
-                        
-                        # Update the bot's response in the last tuple
-                        history[-1][1] += token
-                        sentence_buffer += token
-                        
-                        # Check for full sentence to speak
-                        if sentence_endings.search(sentence_buffer):
-                            parts = sentence_endings.split(sentence_buffer)
-                            
-                            for part in parts[:-1]:
-                                if part.strip():
-                                    audio_path = synthesize_audio(part.strip())
-                                    yield history, audio_path
-                            
-                            sentence_buffer = parts[-1]
-                        else:
-                            # Yield text update only
-                            yield history, None
-
-            # Process remainder
-            if sentence_buffer.strip():
-                audio_path = synthesize_audio(sentence_buffer.strip())
-                yield history, audio_path
-
-    except Exception as e:
-        history[-1][1] += f"\n[Error: {str(e)}]"
-        yield history, None
-
-# =========================================================================
-# 🖥️ GRADIO UI (Version 3.x Compatible)
-# =========================================================================
-
-with gr.Blocks(title="Digital Twin Voice Chat") as demo:
-    gr.Markdown("## 🤖 Digital Twin Interface")
-    
-    # REMOVED type="messages" to support older Gradio
-    chatbot = gr.Chatbot(label="Conversation")
-    
-    with gr.Row():
-        msg = gr.Textbox(label="Type your message...", scale=4)
-        submit = gr.Button("Send", scale=1)
-    
-    audio_out = gr.Audio(label="Voice Output", autoplay=True, visible=True)
-
-    def clear_msg(): return ""
-
-    msg.submit(chat_pipeline, [msg, chatbot], [chatbot, audio_out]) \
-       .then(clear_msg, None, msg)
-       
-    submit.click(chat_pipeline, [msg, chatbot], [chatbot, audio_out]) \
-          .then(clear_msg, None, msg)
-
-if __name__ == "__main__":
-    demo.queue().launch(share=True, server_name="0.0.0.0", server_port=7860)
+    # Regex splits by . ! ? followed by space/newline
+    sentence_endings = re.compile(r'(?<=[.!?
