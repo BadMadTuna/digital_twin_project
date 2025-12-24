@@ -67,43 +67,25 @@ tts_model = load_xtts()
 # =========================================================================
 def generate_ditto_video(audio_path):
     """
-    Calls the Ditto environment to animate the avatar using inference.py
+    Sends a request to the always-on Ditto Server (Port 8000).
     """
-    # Create output filename
     output_video = audio_path.replace(".wav", ".mp4")
     
-    # Construct command
-    cmd = [
-        DITTO_PYTHON, DITTO_SCRIPT,
-        "--cfg_pkl", DITTO_CFG,
-        "--data_root", DITTO_DATA,
-        "--source_path", AVATAR_IMAGE,
-        "--audio_path", audio_path,
-        "--output_path", output_video
-    ]
+    # The API Payload
+    payload = {
+        "audio_path": audio_path,
+        "output_path": output_video
+    }
     
-    # Inject LD_LIBRARY_PATH so the subprocess finds CuDNN 8
-    env = os.environ.copy()
-    ditto_lib = os.path.expanduser("~/digital_twin_project/venv_ditto/lib/python3.10/site-packages/nvidia/cudnn/lib")
-    current_ld = env.get("LD_LIBRARY_PATH", "")
-    env["LD_LIBRARY_PATH"] = f"{current_ld}:{ditto_lib}"
-
     try:
-        # Capture output (PIPE) so we can see errors if it fails
-        subprocess.run(
-            cmd, 
-            env=env, 
-            check=True, 
-            cwd=DITTO_ROOT, 
-            stdout=subprocess.PIPE, 
-            stderr=subprocess.PIPE,
-            text=True
-        )
+        # Hit the local server
+        response = requests.post("http://localhost:8000/generate", json=payload)
+        response.raise_for_status() # Check for errors
         return output_video
-    except subprocess.CalledProcessError as e:
-        print(f"❌ Video Gen Failed!\nSTDERR: {e.stderr}\nSTDOUT: {e.stdout}")
+    except Exception as e:
+        print(f"❌ Video Server Error: Is 'scripts/ditto_server.py' running?\n{e}")
         return None
-
+    
 # =========================================================================
 # 🧠 MAIN PIPELINE
 # =========================================================================
