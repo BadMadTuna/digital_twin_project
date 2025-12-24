@@ -1,20 +1,26 @@
-# scripts/ditto_server.py
-import argparse
+import sys
+import os
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-import os
-import sys
 
-# Add Ditto to path so we can import modules
-sys.path.append(os.path.expanduser("~/digital_twin_project/Ditto"))
+# 1. Setup Paths so we can import Ditto modules
+DITTO_ROOT = os.path.expanduser("~/digital_twin_project/Ditto")
+sys.path.append(DITTO_ROOT)
+
+# 2. Import the Ditto SDK and the official 'run' logic
 from stream_pipeline_offline import StreamSDK
+# We import 'run' from inference.py to reuse its logic
+from inference import run as run_ditto_inference
 
 app = FastAPI()
 
-# Global variable to hold the model
+# Global variables
 SDK = None
+# We define the avatar path here, but we pass it during generation
 AVATAR_PATH = os.path.expanduser("~/digital_twin_project/assets/avatar.jpg")
+CFG_PATH = os.path.join(DITTO_ROOT, "checkpoints/ditto_cfg/v0.4_hubert_cfg_trt.pkl")
+DATA_ROOT = os.path.join(DITTO_ROOT, "checkpoints/ditto_trt_Ampere_Plus")
 
 class VideoRequest(BaseModel):
     audio_path: str
@@ -22,52 +28,47 @@ class VideoRequest(BaseModel):
 
 @app.on_event("startup")
 def load_model():
+    """
+    Loads the heavy TensorRT engine into GPU memory ONCE at startup.
+    """
     global SDK
     print("🚀 [Server] Loading Ditto Model... (This takes ~20s)")
-    
-    # HARDCODED PATHS (Adjust if needed)
-    ditto_root = os.path.expanduser("~/digital_twin_project/Ditto")
-    cfg_pkl = os.path.join(ditto_root, "checkpoints/ditto_cfg/v0.4_hubert_cfg_trt.pkl")
-    data_root = os.path.join(ditto_root, "checkpoints/ditto_trt_Ampere_Plus")
-    
-    # Initialize the SDK ONCE
-    SDK = StreamSDK(cfg_pkl, data_root)
-    SDK.reset_avatar(AVATAR_PATH) # Pre-load the avatar
-    print("✅ [Server] Model Loaded & Ready!")
+    try:
+        # Initialize the heavy engine
+        SDK = StreamSDK(CFG_PATH, DATA_ROOT)
+        print("✅ [Server] Model Loaded & Ready!")
+    except Exception as e:
+        print(f"❌ [Server] Failed to load model: {e}")
+        sys.exit(1)
 
 @app.post("/generate")
 async def generate_video(req: VideoRequest):
+    """
+    Receives an audio path, generates video using the pre-loaded SDK.
+    """
     if not SDK:
         raise HTTPException(status_code=500, detail="Model not loaded")
     
-    print(f"⚡ Processing: {req.audio_path}")
+    print(f"⚡ Processing Audio: {req.audio_path}")
     
     try:
-        # Run generation
-        SDK.process_audio(req.audio_path)
+        # We reuse the official 'run' function from inference.py
+        # It handles librosa loading, frame calculations, and the loop.
+        run_ditto_inference(
+            SDK, 
+            req.audio_path, 
+            AVATAR_PATH, 
+            req.output_path
+        )
         
-        # Save video manually (reusing logic from inference loop)
-        import cv2
-        import imageio
-        
-        # Create a writer
-        writer = imageio.get_writer(req.output_path, fps=25, codec='libx264', audio_path=req.audio_path)
-        
-        while True:
-            frame = SDK.get_next_frame()
-            if frame is None:
-                break
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            writer.append_data(frame_rgb)
+        if os.path.exists(req.output_path):
+            return {"status": "success", "video_path": req.output_path}
+        else:
+            raise HTTPException(status_code=500, detail="Video file was not created.")
             
-        writer.close()
-        
-        return {"status": "success", "video_path": req.output_path}
-        
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"❌ Generation Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
-    # We run on port 8000
     uvicorn.run(app, host="0.0.0.0", port=8000)
