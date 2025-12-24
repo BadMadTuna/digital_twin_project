@@ -26,9 +26,7 @@ REF_AUDIO_PATH = os.path.join(PROJECT_ROOT, "audio_data/dataset/wavs/segment_033
 LANGUAGE = "en"
 
 # 2. VIDEO (DITTO) CONFIGURATION
-# We use absolute paths to ensure the subprocess finds everything
 DITTO_PYTHON = os.path.expanduser("~/digital_twin_project/venv_ditto/bin/python")
-# CHANGED: Pointing to the official inference script
 DITTO_SCRIPT = os.path.expanduser("~/digital_twin_project/Ditto/inference.py")
 DITTO_ROOT = os.path.expanduser("~/digital_twin_project/Ditto")
 DITTO_CFG = os.path.join(DITTO_ROOT, "checkpoints/ditto_cfg/v0.4_hubert_cfg_trt.pkl")
@@ -63,38 +61,31 @@ def load_xtts():
 tts_model = load_xtts()
 
 # =========================================================================
-# 🎥 VIDEO GENERATION BRIDGE
+# 🎥 VIDEO GENERATION BRIDGE (API)
 # =========================================================================
 def generate_ditto_video(audio_path):
     """
     Sends a request to the always-on Ditto Server (Port 8000).
     """
     output_video = audio_path.replace(".wav", ".mp4")
-    
-    # The API Payload
-    payload = {
-        "audio_path": audio_path,
-        "output_path": output_video
-    }
+    payload = { "audio_path": audio_path, "output_path": output_video }
     
     try:
-        # Hit the local server
         response = requests.post("http://localhost:8000/generate", json=payload)
-        response.raise_for_status() # Check for errors
+        response.raise_for_status() 
         return output_video
     except Exception as e:
         print(f"❌ Video Server Error: Is 'scripts/ditto_server.py' running?\n{e}")
         return None
-    
+
 # =========================================================================
-# 🧠 MAIN PIPELINE
+# 🧠 MAIN PIPELINE (Now with Memory!)
 # =========================================================================
 def synthesize_audio(text):
     if not text.strip(): return None, 0
     gpt_cond_latent, speaker_embedding = tts_model.get_conditioning_latents(audio_path=[REF_AUDIO_PATH], gpt_cond_len=30, max_ref_length=60)
     out = tts_model.inference(text, LANGUAGE, gpt_cond_latent, speaker_embedding, temperature=0.7, length_penalty=1.0, repetition_penalty=2.0, top_k=50, top_p=0.8)
     
-    # SAVE AS ABSOLUTE PATH to avoid subprocess finding errors
     filename = f"temp_{int(time.time()*1000)}.wav"
     abs_path = os.path.abspath(filename)
     
@@ -102,14 +93,27 @@ def synthesize_audio(text):
     duration = len(out["wav"]) / 22050
     return abs_path, duration
 
-def chat_pipeline(user_input, mode, history):
+def chat_pipeline(user_input, mode, history, ollama_context):
+    """
+    ollama_context: The hidden state variable that stores the conversation memory.
+    """
     if history is None: history = []
     history.append([user_input, ""])
     
-    payload = {"model": LLM_MODEL, "prompt": user_input, "system": "You are a helpful assistant. Keep answers short (1 sentence).", "stream": True}
+    # Send the memory (context) back to the brain
+    payload = {
+        "model": LLM_MODEL, 
+        "prompt": user_input, 
+        "system": "You are a helpful assistant. Keep answers short (1 sentence).", 
+        "stream": True,
+        "context": ollama_context  # <--- THIS IS THE KEY
+    }
     
     sentence_buffer = ""
     sentence_endings = re.compile(r'(?<=[.!?])\s+')
+    
+    # Variable to hold the NEW context returned by Ollama
+    new_context = ollama_context
 
     try:
         with requests.post(OLLAMA_URL, json=payload, stream=True) as r:
@@ -117,6 +121,8 @@ def chat_pipeline(user_input, mode, history):
             for line in r.iter_lines():
                 if line:
                     body = json.loads(line)
+                    
+                    # Capture the response text
                     if "response" in body:
                         token = body["response"]
                         sentence_buffer += token
@@ -125,10 +131,9 @@ def chat_pipeline(user_input, mode, history):
                             parts = sentence_endings.split(sentence_buffer)
                             for part in parts[:-1]:
                                 if part.strip():
-                                    # 1. Generate Audio
+                                    # Audio/Video Generation Logic
                                     audio_path, duration = synthesize_audio(part.strip())
                                     
-                                    # 2. Generate Video (If Mode is ON)
                                     final_output = audio_path
                                     video_result = None
                                     
@@ -136,29 +141,29 @@ def chat_pipeline(user_input, mode, history):
                                         video_result = generate_ditto_video(audio_path)
                                         if video_result: final_output = video_result
                                     
-                                    # 3. Update UI
                                     history[-1][1] += part + " "
                                     
-                                    # Return appropriate output
+                                    # Yield text, media, AND the context (unchanged for now)
                                     if mode == "Voice Only":
-                                        yield history, final_output, None
+                                        yield history, final_output, None, new_context
                                     else:
                                         if video_result:
-                                            yield history, None, final_output
+                                            yield history, None, final_output, new_context
                                         else:
-                                            # Fallback to audio if video fails
-                                            yield history, audio_path, None
+                                            yield history, audio_path, None, new_context
                                     
-                                    # Pacing
                                     if duration > 0: time.sleep(duration + 0.2)
 
                             sentence_buffer = parts[-1]
-            
-            # Final Chunk
+                    
+                    # Capture the NEW context when done
+                    if "done" in body and body["done"]:
+                        new_context = body["context"]
+
+            # Process Final Chunk
             if sentence_buffer.strip():
                 history[-1][1] += sentence_buffer
                 audio_path, duration = synthesize_audio(sentence_buffer.strip())
-                
                 final_output = audio_path
                 video_result = None
 
@@ -167,83 +172,59 @@ def chat_pipeline(user_input, mode, history):
                     if video_result: final_output = video_result
 
                 if mode == "Voice Only":
-                    yield history, final_output, None
+                    yield history, final_output, None, new_context
                 else:
                      if video_result:
-                        yield history, None, final_output
+                        yield history, None, final_output, new_context
                      else:
-                        yield history, audio_path, None
+                        yield history, audio_path, None, new_context
 
     except Exception as e:
         history[-1][1] += f"\n[Error: {str(e)}]"
-        yield history, None, None
+        yield history, None, None, new_context
 
 # =========================================================================
-# 🖥️ GRADIO UI (Layout Updated)
+# 🖥️ GRADIO UI
 # =========================================================================
 with gr.Blocks(title="Integrated Digital Twin", theme=gr.themes.Soft()) as demo:
-    # Header
     gr.Markdown("# 🧬 Integrated Digital Twin Interface")
     gr.Markdown("Chat with your AI avatar. Switch modes to enable real-time video generation.")
     
-    # Main Layout container
+    # HIDDEN STATE to store Ollama memory
+    conversation_state = gr.State([]) 
+
     with gr.Row():
-        # ----- LEFT COLUMN (MAIN CHAT) -----
         with gr.Column(scale=4):
-            # Mode selection near the chat
             mode_select = gr.Radio(
                 ["Voice Only", "Video (Ditto)"], 
                 label="Output Mode", 
                 value="Voice Only", 
                 info="Video mode will take several seconds to process each response."
             )
-            
-            # The main chat window
             chatbot = gr.Chatbot(label="Conversation", height=500)
-            
-            # Input area
             with gr.Row():
-                msg = gr.Textbox(
-                    label="Type message...", 
-                    placeholder="Ask me anything...",
-                    scale=4,
-                    autofocus=True
-                )
+                msg = gr.Textbox(label="Type message...", placeholder="Ask me anything...", scale=4, autofocus=True)
                 submit = gr.Button("Send", scale=1, variant="primary")
 
-        # ----- RIGHT COLUMN (AVATAR VIEW - Top Right) -----
         with gr.Column(scale=1, min_width=300):
             gr.Markdown("### Avatar View")
-            
-            # Video Player (Top Right)
-            # Setting interactive=False prevents the user from uploading their own video
-            video_player = gr.Video(
-                label="Visual Output", 
-                autoplay=True, 
-                visible=True, 
-                interactive=False,
-                height=300 # Fixed height to keep it compact
-            )
-            
-            # Audio Player (Below Video)
-            audio_player = gr.Audio(
-                label="Voice Output", 
-                autoplay=True, 
-                visible=True, 
-                interactive=False
-            )
+            video_player = gr.Video(label="Visual Output", autoplay=True, visible=True, interactive=False, height=300)
+            audio_player = gr.Audio(label="Voice Output", autoplay=True, visible=True, interactive=False)
 
-    # Helper to clear text box
     def clear_msg(): return ""
 
-    # Event Wiring
-    # Note: We update both players. The pipeline decides which one gets data.
-    msg.submit(chat_pipeline, [msg, mode_select, chatbot], [chatbot, audio_player, video_player]) \
-       .then(clear_msg, None, msg)
+    # UPDATED WIRING: Now passing 'conversation_state' in and out
+    msg.submit(
+        chat_pipeline, 
+        [msg, mode_select, chatbot, conversation_state], 
+        [chatbot, audio_player, video_player, conversation_state]
+    ).then(clear_msg, None, msg)
        
-    submit.click(chat_pipeline, [msg, mode_select, chatbot], [chatbot, audio_player, video_player]) \
-          .then(clear_msg, None, msg)
+    submit.click(
+        chat_pipeline, 
+        [msg, mode_select, chatbot, conversation_state], 
+        [chatbot, audio_player, video_player, conversation_state]
+    ).then(clear_msg, None, msg)
 
 if __name__ == "__main__":
-    # Launch with public link
     demo.queue().launch(share=True, server_name="0.0.0.0", server_port=7860, allowed_paths=[PROJECT_ROOT])
