@@ -6,6 +6,8 @@ scripts/controller.html
 
 scripts/debug.html
 
+scripts/mobile_debug.html
+
 desktop_test.wav
 
 output_fine_tuned_test.wav

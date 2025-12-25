@@ -185,9 +185,24 @@ def chat_pipeline(user_input, mode, history, ollama_context):
         yield history, None, None, new_context
 
 # =========================================================================
-# 🖥️ GRADIO UI
+# 🖥️ GRADIO UI (Mobile Optimized)
 # =========================================================================
-with gr.Blocks(title="Integrated Digital Twin", theme=gr.themes.Soft()) as demo:
+
+# CSS FIXES:
+# 1. 'video': Forces the video player to fit within the screen height.
+# 2. 'gradio-container': Adds padding at the bottom so the phone's nav bar doesn't hide content.
+# 3. 'footer': Hides the "Built with Gradio" text to save precious mobile screen space.
+mobile_css = """
+video { max-height: 50vh !important; object-fit: contain !important; }
+.gradio-container { padding-bottom: 150px !important; }
+footer { display: none !important; }
+@media (max-width: 768px) {
+    .gradio-container { padding: 5px !important; }
+    .prose { font-size: 16px !important; }
+}
+"""
+
+with gr.Blocks(title="Integrated Digital Twin", theme=gr.themes.Soft(), css=mobile_css) as demo:
     gr.Markdown("# 🧬 Integrated Digital Twin Interface")
     gr.Markdown("Chat with your AI avatar. Switch modes to enable real-time video generation.")
     
@@ -202,25 +217,27 @@ with gr.Blocks(title="Integrated Digital Twin", theme=gr.themes.Soft()) as demo:
                 value="Voice Only", 
                 info="Video mode will take several seconds to process each response."
             )
-            chatbot = gr.Chatbot(label="Conversation", height=500)
+            # Reduced height slightly to fit better on mobile screens
+            chatbot = gr.Chatbot(label="Conversation", height=400)
             with gr.Row():
                 msg = gr.Textbox(label="Type message...", placeholder="Ask me anything...", scale=4, autofocus=True)
                 submit = gr.Button("Send", scale=1, variant="primary")
 
         with gr.Column(scale=1, min_width=300):
             gr.Markdown("### Avatar View")
+            # Fixed height for video player to prevent layout jumping
             video_player = gr.Video(label="Visual Output", autoplay=True, visible=True, interactive=False, height=300)
             audio_player = gr.Audio(label="Voice Output", autoplay=True, visible=True, interactive=False)
 
     def clear_msg(): return ""
 
-    # UPDATED WIRING: Now passing 'conversation_state' in and out
+    # WIRING (Unchanged)
     msg.submit(
         chat_pipeline, 
         [msg, mode_select, chatbot, conversation_state], 
         [chatbot, audio_player, video_player, conversation_state]
     ).then(clear_msg, None, msg)
-       
+        
     submit.click(
         chat_pipeline, 
         [msg, mode_select, chatbot, conversation_state], 
