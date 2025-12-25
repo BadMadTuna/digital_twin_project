@@ -5,6 +5,7 @@ import json
 import re
 import torch
 import subprocess
+import boto3
 import gradio as gr
 import soundfile as sf
 from TTS.tts.configs.xtts_config import XttsConfig
@@ -227,4 +228,38 @@ with gr.Blocks(title="Integrated Digital Twin", theme=gr.themes.Soft()) as demo:
     ).then(clear_msg, None, msg)
 
 if __name__ == "__main__":
-    demo.queue().launch(share=True, server_name="0.0.0.0", server_port=7860, allowed_paths=[PROJECT_ROOT])
+    # --- ☁️ CLOUD LINK AUTOMATION ☁️ ---
+    import boto3  # Required for AWS communication
+    
+    print("🚀 Launching and syncing with Cloud...")
+
+    # 1. Enable Queueing (Important for chat history)
+    demo.queue()
+
+    # 2. Launch with 'prevent_thread_lock=True' so we can run the AWS code below
+    # We capture the second return value [1], which is the public Gradio URL
+    share_url = demo.launch(
+        share=True,
+        server_name="0.0.0.0",
+        server_port=7860,
+        allowed_paths=[PROJECT_ROOT],
+        prevent_thread_lock=True
+    )[1]
+    
+    print(f"🔗 Generated Link: {share_url}")
+
+    # 3. Save the link to AWS Parameter Store (The "Cloud Clipboard")
+    try:
+        ssm = boto3.client('ssm', region_name='eu-central-1')
+        ssm.put_parameter(
+            Name='DigitalTwinURL',
+            Value=share_url,
+            Type='String',
+            Overwrite=True
+        )
+        print("✅ Link saved to Cloud Clipboard!")
+    except Exception as e:
+        print(f"⚠️ Failed to save link to Cloud: {e}")
+
+    # 4. Keep the script running forever (since we prevented the lock earlier)
+    demo.block_thread()

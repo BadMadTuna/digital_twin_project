@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Twin Debugger</title>
+    <style>
+        body { background: #111; color: #fff; font-family: monospace; padding: 20px; }
+        .box { border: 1px solid #444; padding: 20px; margin-bottom: 20px; }
+        .success { color: #0f0; }
+        .error { color: #f55; }
+        button { font-size: 16px; padding: 10px 20px; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <h2>🔍 Connection Diagnostic</h2>
+    
+    <div class="box">
+        <strong>Target URL:</strong><br>
+        <span id="url_display">...</span>
+    </div>
+
+    <button onclick="runTest()">▶️ RUN TEST</button>
+
+    <div class="box">
+        <strong>Status:</strong> <span id="status">Waiting...</span><br><br>
+        <strong>Raw Output:</strong><br>
+        <pre id="output">No data yet.</pre>
+    </div>
+
+<script>
+    // ⚠️ This is the URL that worked in your CURL command
+    const API_URL = "https://zobjfm3wag.execute-api.eu-central-1.amazonaws.com/default/DigitalTwinController";
+    
+    document.getElementById("url_display").innerText = API_URL;
+
+    async function runTest() {
+        const out = document.getElementById("output");
+        const stat = document.getElementById("status");
+        
+        stat.innerText = "Connecting...";
+        out.innerText = "Fetching...";
+        
+        try {
+            // 1. Sending the request
+            let response = await fetch(API_URL + "?action=status", {
+                method: "GET",
+                headers: { "Content-Type": "application/json" } // Standard header
+            });
+
+            // 2. Handling the response
+            stat.innerText = "Response Received: " + response.status;
+            
+            if (!response.ok) {
+                 throw new Error(`HTTP Error: ${response.status} ${response.statusText}`);
+            }
+
+            let text = await response.text();
+            out.innerText = text;
+            out.className = "success";
+            stat.innerText += " (SUCCESS)";
+
+        } catch (error) {
+            // 3. Handling failures
+            stat.innerText = "FAILED";
+            out.className = "error";
+            out.innerText = "ERROR DETAILS:\n" + error.message + "\n\n" +
+                            "POSSIBLE CAUSES:\n" +
+                            "1. Certificate Block (Your laptop issue)\n" +
+                            "2. CORS Block (Server didn't send headers)\n" +
+                            "3. Network Block (Firewall/Router)";
+        }
+    }
+</script>
+</body>
+</html>
